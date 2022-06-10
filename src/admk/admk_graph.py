@@ -1,19 +1,7 @@
 # import Solver 
-from rcis import Solver
 from copy import deepcopy as cp
 
 import sys
-# Import I/O for timedata
-try:
-    sys.path.append('/home/fh/srcs/globals/python/timedata/')
-    import timedata as td
-except:
-    print("Global repo non found")
-
-# Import geometry tools
-sys.path.append('/home/fh/srcs/geometry/python/')
-import meshtools as mt
-
 
 import numpy as np
 import scipy as sp
@@ -340,7 +328,7 @@ class InfoAdmkSolver():
         self.nonlinear_sovler_residum = 0.0
 
         
-class AdmkSolver(Solver):
+class AdmkSolver:
     """
     Solver class for problem
     min \|v\|_{w}^{q} A v= rhs
@@ -397,7 +385,7 @@ class AdmkSolver(Solver):
         stiff=matrixA.dot(diagt.dot(matrixA.transpose()))
         return stiff;
 
-    def syncronize(self, problem, tdpot):
+    def syncronize(self, problem, tdpot, ierr):
         """        
         Args:
          tdpot: Class with unkowns (tdens, pot in this case)
@@ -496,7 +484,6 @@ class AdmkSolver(Solver):
         if (info_solver.info !=0 ) :
             ierr=1
         
-        return tdpot,ierr,self;
 
     def tdens2gfvar(self,tdens):
         """
@@ -520,7 +507,7 @@ class AdmkSolver(Solver):
         return tdens
     
     
-    def iterate(self, problem, tdpot):
+    def iterate(self, problem, tdpot, ierr):
         """
         Procedure overriding update of parent class(Problem)
         
@@ -550,8 +537,8 @@ class AdmkSolver(Solver):
             [tdpot,ierr,self] = self.syncronize(problem,tdpot)
 
             
-            tdpot.time=tdpot.time+self.ctrl.deltat    
-            return tdpot, ierr, self;
+            tdpot.time=tdpot.time+self.ctrl.deltat
+            
         elif (self.ctrl.time_discretization_method == 'explicit_gfvar'):            
             # compute update
             gfvar = self.tdens2gfvar(tdpot.tdens) 
@@ -570,7 +557,7 @@ class AdmkSolver(Solver):
             [tdpot,ierr,self] = self.syncronize(problem,tdpot)
 
             tdpot.time=tdpot.time+self.ctrl.deltat    
-            return tdpot, ierr, self;
+
         elif (self.ctrl.time_discretization_method == 'implicit_gfvar'):
             #shorthand
             n_pot = problem.nrow
@@ -700,11 +687,9 @@ class AdmkSolver(Solver):
 
             # pass the newton error (0,1,2)
             ierr = ierr_newton
-            return tdpot, ierr, self;
         else:
             print('value: self.ctrl.time_discretization_method not supported. Passed:',self.ctrl.time_discretization_method )
             ierr = 1
-            return tdpot, ierr, self;
 
             
 

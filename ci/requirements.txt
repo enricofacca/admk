@@ -3,3 +3,6 @@ pip>=19.1.1
 setuptools>=18.0.1
 six>=1.14.0
 tox
+rcis>=0.2.0
+numpy>=1.19.0
+
