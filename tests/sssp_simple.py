@@ -2,6 +2,7 @@
 from copy import deepcopy as cp
 
 import sys
+import os
 
 # Import Admk solver for graphs
 sys.path.append('../src/')
@@ -12,6 +13,8 @@ from admk import AdmkControls
 from admk import AdmkSolver
 
 # import Iterative solver
+sys.path.append(os.path.abspath("../../rcis/src/"))
+print(sys.path)
 from rcis import CycleControls
 
 
@@ -168,57 +171,62 @@ class InfoProblem():
 info_admk=InfoProblem()
         
 # init update cycle controls
-time_controls=CycleControls(1000)
+flags=CycleControls(1000)
 
 
 
 # Start main cycle
-[tdpot,ierr,admk] = admk.syncronize(problem,tdpot)
+admk.syncronize(problem,tdpot,flags.ierr)
+
 tdpot_old=cp(tdpot)
 hystory=[]
-while(time_controls.flag >=0):
-    # call reverse communication
-    flags, sol, admk = (
-        time_controls.reverse_communication(admk, problem, tdpot)
+while(flags.flag >=0):
+  # call reverse communication
+  flags.reverse_communication_simple()
+  
+  ###################################################
+  # select action according to flag.flag and flag.info
+  ######################################################
+
+  if (flags.flag == 1):
+    # update system
+    admk.iterate(problem, tdpot, flags.ierr)
+
+  if (flags.flag == 2):
+    # Here the user evalutes if convergence is achieved
+    var = (
+      norm(tdpot.tdens - tdpot_old.tdens) /
+      (norm(tdpot.tdens) * admk.ctrl.deltat)
     )
-    
-    ###################################################
-    # select action according to flag.flag and flag.info
-    ######################################################
 
-
-    if (flags.flag == 1):
-        # Here the user evalutes if convergence is achieved
-        var = (
-            norm(tdpot.tdens - tdpot_old.tdens) /
-            (norm(tdpot.tdens) * admk.ctrl.deltat)
-        )
-
-        print(' ')
-        print('var=',var)
-        if (var < 1e-4):
-            flags.flag = -1
-            flags.info = 0
+    print(' ')
+    print('var=',var)
+    if (var < 1e-4):
+      flags.flag = -1
+      flags.info = 0
             
-    if (flags.flag == 2):
-        """ Study state system """
-        print(' ')
-        print('iter=',time_controls.iterations,'time=',tdpot.time)
-        grad=problem.potential_gradient(tdpot.pot)
-        print('{:.2E}'.format(min(abs(grad)))+'<=|GRAD| <='+'{:.2E}'.format(max(abs(grad))))
+  if (flags.flag == 3):
+    """ Study state system """
+    print(' ')
+    print('iter=',flags.iterations,'time=',tdpot.time)
+    grad=problem.potential_gradient(tdpot.pot)
+    print('{:.2E}'.format(min(abs(grad)))+'<=|GRAD| <='+'{:.2E}'.format(max(abs(grad))))
 
-        #print('{:.2E}'.format(min(optpot))+'<=POT <='+'{:.2E}'.format(max(optpot)))
+    #print('{:.2E}'.format(min(optpot))+'<=POT <='+'{:.2E}'.format(max(optpot)))
 
-        root = np.unravel_index(np.argmin(optpot, axis=None), optpot.shape)
-        temp=tdpot.pot+optpot
-        temp=temp-tdpot.pot[root]
+    root = np.unravel_index(np.argmin(optpot, axis=None), optpot.shape)
+    temp=tdpot.pot+optpot
+    temp=temp-tdpot.pot[root]
         
-        #print(tdpot.pot[root])
-        print('err_pot',np.linalg.norm(temp)/np.linalg.norm(optpot))
-        hystory.append([sol.time,cp(admk.info)])
-        
+    #print(tdpot.pot[root])
+    print('err_pot',np.linalg.norm(temp)/np.linalg.norm(optpot))
+    hystory.append([tdpot.time,cp(admk.info)])
 
-    if (flags.flag == 3):
+  if (flags.flag == 4): 
+        """ Reset controls after a failure """
+        admk.ctrl.reset_after_failure(flags.ierr)
+
+  if (flags.flag == 5):
         """ Here user have to set solver controls for next update """
         admk.ctrl.set_before_iteration()
         print('new_deltat=',admk.ctrl.deltat)
@@ -226,6 +234,4 @@ while(time_controls.flag >=0):
         # copy data before update
         tdpot_old=cp(tdpot)
             
-    if (flags.flag == 4): 
-        """ Reset controls after a failure """
-        admk.ctrl.reset_after_failure(flags.ierr)
+    
