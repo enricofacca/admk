@@ -23,7 +23,7 @@ def read(*names, **kwargs):
 
 setup(
     name='admk',
-    version='0.0.0',
+    version='0.1.0',
     license='MIT',
     description='Algebraic Dynamics Monge Kantorovich solver for Basis Pursuit problem',
     long_description='%s\n%s' % (

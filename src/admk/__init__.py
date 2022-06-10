@@ -1,4 +1,4 @@
-__version__ = '0.0.0'
+__version__ = '0.1.0'
 
 from .admk_graph import Graph
 from .admk_graph import MinNorm
