@@ -59,7 +59,10 @@ Overview
 
 .. end-badges
 
-Algebraic Dynamics Monge Kantorovich solver for Basis Pursuit problem
+Algebraic Dynamics Monge Kantorovich solver for solution of Optimal Transport on
+Graphs. It contains (part of) the work described in `Fast Iterative Solution of the Optimal Transport Problem on Graphs <https://doi.org/10.1137/20M137015X>`_
+
+
 
 * Free software: MIT license
 
