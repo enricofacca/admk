@@ -1,22 +1,7 @@
 # import Solver 
-from rcis import Solver
 from copy import deepcopy as cp
 
 import sys
-# Import I/O for timedata
-try:
-    sys.path.append('/home/fh/srcs/globals/python/timedata/')
-    import timedata as td
-except:
-    print("Global repo non found")
-
-# Import geometry tools
-sys.path.append('/home/fh/srcs/geometry/python/')
-import meshtools as mt
-
-# Import geometry tools
-sys.path.append('/home/fh/srcs/geometry/python/')
-import meshtools as mt
 
 # Import Admk solver for graphs
 sys.path.append('../src/')
@@ -37,22 +22,116 @@ import time as cputiming
 import os
 
 
+def read_grid(filename):
+  f_grid = open(filename, 'r')
+  # writing data
+  input_lines = f_grid.readlines()
+  nnode= int(input_lines[0].split()[0])
+  ntria= int(input_lines[1].split()[0])
+  try:
+    nnodeincell= int(input_lines[1].split()[1])
+  except:
+    nnodeincell=3
+  coord=np.zeros([nnode,3])
+  triang=np.zeros([ntria,nnodeincell],dtype=int)
+  flags=np.zeros(ntria,dtype=int)
+
+  inode=0
+  try: 
+    coord[inode][:]=[float(w) for w in input_lines[2].split()[0:2]]
+    ncoord=2
+  except:
+    coord[inode][:]=[float(w) for w in input_lines[2].split()[0:3]]
+    ncoord=3
+
+  inode=1
+  for line in input_lines[3:2+nnode]:
+    coord[inode][:]=[float(w) for w in line.split()[0:ncoord]]
+    inode=inode+1
+  itria=0
+  for line in input_lines[2+nnode:]:
+    triang[itria][:]=[int(w)-1 for w in line.split()[0:nnodeincell]]
+    flags[itria]=line.split()[nnodeincell]
+    itria=itria+1
+  
+ 
+  return coord,triang,flags;
+
+#
+# Fucntion for a fast writing to file of timedata .
+# For steady-state data only 
+#
+def write_steady_timedata(filename,data):
+   file_out=open(str(filename), 'w')
+   try:
+      dimdata=data.shape[1]
+      ndata=data.shape[0]
+   except:
+      dimdata=1
+      ndata=len(data)
+      
+   file_out.write(
+      str(dimdata) + " " + 
+      str(ndata) + " !  dim ndata" 
+      +"\n")
+   nrm_data=np.zeros(ndata)
+   for i in range(ndata):
+      nrm_data[i]=np.linalg.norm(data[:][i])
+   nnz=(abs(nrm_data) != 0.0).sum()
+   #print nnz.shape
+   file_out.write("time    -1.0e-30 \n")
+   file_out.write(str(ndata)+" \n")
+   try:
+      for i in range(ndata):
+         #if ( np.sum(np.abs(data[:][i])) != 0.0):
+         file_out.write(str(i+1)+" " + 
+                        " ".join(map(str,data[:][i])) +"\n")
+   except:
+      for i in range(ndata):
+         #if ( np.sum(np.abs(data[i])) != 0.0):
+         file_out.write(str(i+1)+" " + 
+                        str(data[i]) +"\n")
+      
+   file_out.write("time  1.0e+30 \n")
+   file_out.close()
+   return;
+
+#
+# Fucntion for a fast reading from file of timedata .
+# For steady-state data only 
+#
+def read_steady_timedata(filename):
+   fin=open(str(filename), 'r')
+   lines = fin.readlines()
+   dimdata=int(lines[0].split()[0])
+   ndata=int(lines[0].split()[1])
+   data=np.zeros([ndata,dimdata])   
+   ninputs= int(lines[2].split()[0])
+   for i in range(ninputs):
+      line=lines[3+i]
+      idata=int(line.split()[0])
+      data[idata-1,:]=[float(w) for w in line.split()[1:]]
+   fin.close()
+   return data;
+
+
+
 # read graph and coordinate graphs
 inputs_folder='inputs/'
 test=sys.argv[1]
-coord,topol,flags = mt.read_grid(inputs_folder+'eikonal_'+test+'/grid_'+test+'_graph.dat')
+coord,topol,flags = read_grid(inputs_folder+'eikonal_'+test+'/grid_'+test+'_graph.dat')
 
 # read rhs
-rhs=td.read_steady_timedata(inputs_folder+'eikonal_'+test+'/eik_'+test+'_rhs.dat').flatten()
+rhs=read_steady_timedata(inputs_folder+'eikonal_'+test+'/eik_'+test+'_rhs.dat').flatten()
 print('rhs',len(rhs))
 isource=np.argmax(rhs)
 print('Source node',isource, 'located at:', coord[isource,:])
 
 # read weight
-weigth=td.read_steady_timedata(inputs_folder+'eikonal_'+test+'/weight_'+test+'.dat').flatten()
+weigth=read_steady_timedata(inputs_folder+'eikonal_'+test+'/weight_'+test+'.dat').flatten()
 
 # read optimal solution 
-optpot=td.read_steady_timedata(inputs_folder+'eikonal_'+test+'/eik_'+test+'_optpot.dat').flatten()
+optpot=read_steady_timedata(inputs_folder+'eikonal_'+test+'/eik_'+test+'_optpot.dat').flatten()
 
 
 # Init. graph problem
@@ -125,8 +204,6 @@ while(time_controls.flag >=0):
         """ Study state system """
         print(' ')
         print('iter=',time_controls.iterations,'time=',tdpot.time)
-        #print('{:.2E}'.format(min(tdpot.tdens))+'<=TDENS<='+'{:.2E}'.format(max(tdpot.tdens)))
-        #print('{:.2E}'.format(min(tdpot.pot))+'<=POT  <='+'{:.2E}'.format(max(tdpot.pot)))
         grad=problem.potential_gradient(tdpot.pot)
         print('{:.2E}'.format(min(abs(grad)))+'<=|GRAD| <='+'{:.2E}'.format(max(abs(grad))))
 
@@ -140,8 +217,6 @@ while(time_controls.flag >=0):
         print('err_pot',np.linalg.norm(temp)/np.linalg.norm(optpot))
         hystory.append([sol.time,cp(admk.info)])
         
-        print(len(tdpot.tdens),len(topol))
-        #td.write(tdpot.time, point_data={"pot": tdpot.pot})
 
     if (flags.flag == 3):
         """ Here user have to set solver controls for next update """
