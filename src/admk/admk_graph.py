@@ -114,9 +114,6 @@ class MinNorm:
                          A vel = rhs
             q_exponent (real) : exponent q of the norm |vel|^q
         """
-        if (np.sum(rhs)>1e-12):
-            print('Rhs is not balanced')
-        print('here  ',len( self.rhs),len(rhs))
         self.rhs[:]=rhs[:]
         self.q_exponent=q_exponent
         return self
@@ -142,7 +139,7 @@ class MinNorm:
         Returns:
         grad: real (ncol of A)-np.array with gradient
         """
-        grad=self.inv_weight*self.matrixT.dot(pot)
+        grad = self.inv_weight*self.matrixT.dot(pot)
         return grad;
 
 class Graph:
@@ -331,59 +328,50 @@ class InfoAdmkSolver():
 class AdmkSolver:
     """
     Solver class for problem
-    min \|v\|_{w}^{q} A v= rhs
-    with A signed incidence matrix of Graph
-    
+    min \|v\|_{w}^{q} A v = rhs
+    with A signed incidence matrix of Graph   
     via Algebraic Dynamic Monge-Kantorovich.
     We find the long time solution of the
     dynamics 
-    \dt \Tdens(t)=\Tdens(t) * | \Grad \Pot(\Tdens)|^2 -Tdens^{gamma}
-    
+    \dt \Tdens(t)=\Tdens(t) * | \Grad \Pot(\Tdens)|^2 -Tdens^{gamma}    
     """
-    """
-    We extend the class "Solver"
-    ovverriding the "syncronize" and the "update"
-    procedure. 
-    """
-    def __init__(self, ctrl=None):
+    def __init__(self, ctrl = None):
         """
-        Initialize solver with passed controls (or default)
+		Initialize solver with passed controls (or default)
         and initialize structure to store info on solver application
         """
-        # init controls
         if (ctrl == None):
             self.ctrl = AdmkControls()
         else:
             self.ctrl = cp(ctrl)
-
-        # init infos
+			
+		# init infos
         self.info = InfoAdmkSolver()
 
     def print_info(self, msg, priority):
         """
-        Print messagge to stdout and to log 
+	Print messagge to stdout and to log 
         file according to priority passed
         """
-        
         if (self.ctrl.verbose > priority):
             print(msg)
-        #if (self.ctrl.log >  priority):
-        #    print(msg)    
-        
-    def build_stiff(self,matrixA,conductivity):
-        """
-         Internal procedure to assembly stifness matrix 
-         S(tdens)=A conductivity A^T
 
-         Args:
+
+    def build_stiff(self, matrixA, conductivity):
+        """
+        Internal procedure to assembly stifness matrix 
+        S(tdens)=A conductivity A^T
+		
+        Args:
          conductivity: non-negative real (ncol of A)-np.array with conductivities
 
-         Returns:
-         stiff: Scipy sparse matrix
-         """
+        Returns:
+		 stiff: Scipy sparse matrix
+        """
         diagt=sp.sparse.diags(conductivity)
         stiff=matrixA.dot(diagt.dot(matrixA.transpose()))
-        return stiff;
+        return stiff
+
 
     def syncronize(self, problem, tdpot, ierr):
         """        
@@ -391,15 +379,15 @@ class AdmkSolver:
          tdpot: Class with unkowns (tdens, pot in this case)
          problem: Class with inputs  (rhs, q_exponent)
          ctrl:  Class with controls
-
+		
         Returns:
-         tdpot : syncronized to fill contraint S(tdens) pot = rhs
-         info  : control flag (=0 if everthing worked)
+        tdpot : syncronized to fill contraint S(tdens) pot = rhs
+        info  : control flag (=0 if everthing worked)
         """
-
+		
         # assembly stiff
-        msg=print(f'{min(tdpot.tdens):.2E}<=TDENS<={max(tdpot.tdens):.2E}')
-        self.print_info(msg,3)
+        msg = (f'{min(tdpot.tdens):.2E}<=TDENS<={max(tdpot.tdens):.2E}')
+        self.print_info(msg, 3)
         
         start_time = cputiming.time()
         conductivity = tdpot.tdens*problem.inv_weight
@@ -428,8 +416,6 @@ class AdmkSolver:
             rhs[inode] = 0.0
         else:
             stiff=stiff#+1e-12*sp.sparse.eye(tdpot.n_pot)
-
-        print(type(stiff))
             
         # scaling=True
         scaling =False
@@ -457,7 +443,6 @@ class AdmkSolver:
         
         
         # solve linear system
-        #print(info_solver)
         start_time = cputiming.time()
         [pot,info_solver.info]=splinalg.bicgstab(
             matrix2solve, rhs2solve, x0=x0,
@@ -519,7 +504,6 @@ class AdmkSolver:
          tdpot : update tdpot from time t^k to t^{k+1} 
 
         """
-        print(self.ctrl.time_discretization_method)
         if (self.ctrl.time_discretization_method == 'explicit_tdens'):            
             # compute update
             grad = problem.potential_gradient(tdpot.pot)
