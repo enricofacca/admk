@@ -72,3 +72,8 @@ docs/_build
 
 # Mypy Cache
 .mypy_cache/
+
+# Data
+*.dat
+*.log
+*.csv
