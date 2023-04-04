@@ -83,7 +83,7 @@ class MinNorm:
       columns number = number of edges    
     - rhs = right-hand side
     """
-    def __init__(self, matrix,weight=None,matrixT=None):
+    def __init__(self, matrix, weight=None, matrixT=None):
         """
         Constructor of problem setup
         """
@@ -128,7 +128,7 @@ class MinNorm:
             ierr=1
         return ierr
 
-    def potential_gradient(self,pot):
+    def potential_gradient(self, pot):
         """
         Procedure to compute gradient of the potential
         grad=W^{-1} A^T pot
@@ -139,8 +139,8 @@ class MinNorm:
         Returns:
         grad: real (ncol of A)-np.array with gradient
         """
-        grad = self.inv_weight*self.matrixT.dot(pot)
-        return grad;
+        grad = self.inv_weight * self.matrixT.dot(pot)
+        return grad
 
 class Graph:
     """
@@ -164,18 +164,13 @@ class Graph:
         """
 
         # member with edge number
-        self.n_edge    = len(topol)
-        if (np.amin(topol) == 0 ):
-            # 0-based numbering
-            n_node=np.amax(topol)+1
-        elif ( np.amin(topol) == 1) :
-            # 1-based numbering
-            n_node=np.amax(topol)
+        self.n_edges    = topol.shape[1]
+        
         # member with nodes number
-        self.n_node      = n_node
-
+        self.n_nodes = np.amax(topol) + 1 - np.amin(topol)
+        
         # graph topology
-        self.topol     = cp(topol)
+        self.topol = cp(topol)
 
 
     def signed_incidence_matrix(self):
@@ -188,20 +183,17 @@ class Graph:
         Result:
         matrix : signed incidence matrix 
         """
-        n_tdens=len(self.topol)
-        n_pot=np.amax(self.topol)+1
-        
         # build signed incidence matrix
-        indptr  = np.zeros([2*n_tdens]).astype(int) # rows
-        indices = np.zeros([2*n_tdens]).astype(int) # columns
-        data    = np.zeros([2*n_tdens])                # nonzeros
-        for i in range(n_tdens):
+        indptr  = np.zeros([2*self.n_edges]).astype(int) # rows
+        indices = np.zeros([2*self.n_edges]).astype(int) # columns
+        data    = np.zeros([2*self.n_edges])                # nonzeros
+        for i in range(self.n_edges):
             indptr[2*i:2*i+2]  = int(i)
-            indices[2*i] = int(self.topol[i,0])
-            indices[2*i+1] = int(self.topol[i,1])
+            indices[2*i] = int(self.topol[0,i])
+            indices[2*i+1] = int(self.topol[1,i])
             data[2*i:2*i+2]    = [1.0,-1.0]
             #print(topol[i,:],indptr[2*i:2*i+2],indices[2*i:2*i+2],data[2*i:2*i+2])
-        signed_incidence = sp.sparse.csr_matrix((data, (indptr,indices)),shape=(n_tdens, n_pot))
+        signed_incidence = sp.sparse.csr_matrix((data, (indptr,indices)),shape=(self.n_edges, self.n_nodes))
         return signed_incidence
 
     def save_time_series(self):
@@ -253,13 +245,19 @@ class AdmkControls:
         self.time_discretization_method = 'explicit_tdens'
 
         #: real: time step size
+        self.max_iter = 100
         self.deltat = deltat
 
-        # variables for set and reset procedure
-        self.deltat_control = 0
+        # option to adapt time step:
+        # fixed : fixed time step
+        # expand : adaptive time step according to expansion_deltat
+        # contract : adaptive time step according to error
+        self.deltat_control = 'fixed'
         self.min_deltat = 1e-2
         self.max_deltat = 1e+2
         self.expansion_deltat = 2
+
+        self.max_restart = 2
         
         #: int: max number of Krylov solver iterations
         self.max_linear_iterations = max_linear_iterations
@@ -291,6 +289,13 @@ class AdmkControls:
         self.save_log=0
         self.file_log='admk.log'
 
+    def print_info(self, msg, priority):
+        """
+	    Print messagge to stdout and to log 
+        file according to priority passed
+        """
+        if (self.verbose > priority):
+            print(msg)
       
 
     def set_before_iteration(self):
@@ -335,28 +340,18 @@ class AdmkSolver:
     dynamics 
     \dt \Tdens(t)=\Tdens(t) * | \Grad \Pot(\Tdens)|^2 -Tdens^{gamma}    
     """
-    def __init__(self, ctrl = None):
+    def __init__(self):
         """
 		Initialize solver with passed controls (or default)
         and initialize structure to store info on solver application
         """
-        if (ctrl == None):
-            self.ctrl = AdmkControls()
-        else:
-            self.ctrl = cp(ctrl)
-			
 		# init infos
-        self.info = InfoAdmkSolver()
+        self.linear_solver_iterations = 0
+        # non linear solver
+        self.nonlinear_solver_iterations = 0
+        self.nonlinear_solver_residum = 0.0
 
-    def print_info(self, msg, priority):
-        """
-	Print messagge to stdout and to log 
-        file according to priority passed
-        """
-        if (self.ctrl.verbose > priority):
-            print(msg)
-
-
+    
     def build_stiff(self, matrixA, conductivity):
         """
         Internal procedure to assembly stifness matrix 
@@ -368,12 +363,12 @@ class AdmkSolver:
         Returns:
 		 stiff: Scipy sparse matrix
         """
-        diagt=sp.sparse.diags(conductivity)
-        stiff=matrixA.dot(diagt.dot(matrixA.transpose()))
+        diagt = sp.sparse.diags(conductivity)
+        stiff = matrixA.dot(diagt.dot(matrixA.transpose()))
         return stiff
 
 
-    def syncronize(self, problem, tdpot, ierr):
+    def syncronize(self, problem, tdpot, ctrl):
         """        
         Args:
          tdpot: Class with unkowns (tdens, pot in this case)
@@ -387,18 +382,16 @@ class AdmkSolver:
 		
         # assembly stiff
         msg = (f'{min(tdpot.tdens):.2E}<=TDENS<={max(tdpot.tdens):.2E}')
-        self.print_info(msg, 3)
+        ctrl.print_info(msg, 3)
         
         start_time = cputiming.time()
-        conductivity = tdpot.tdens*problem.inv_weight
+        conductivity = tdpot.tdens * problem.inv_weight
         stiff = self.build_stiff(problem.matrix,conductivity)
         rhs = problem.rhs.copy()
 
         msg = ('ASSEMBLY'+'{:.2f}'.format(-(start_time - cputiming.time()))) 
-        self.print_info(msg,3)
-
-        
-        
+        ctrl.print_info(msg,3)
+    
         #
         # solve linear system
         #
@@ -408,7 +401,7 @@ class AdmkSolver:
         info_solver.resini=norm(stiff*tdpot.pot-problem.rhs)/norm(problem.rhs)
         
         # ground solution
-        inode=np.argmax(abs(problem.rhs))
+        inode = np.argmax(abs(problem.rhs))
         grounding=True
         #grounding=False
         if (grounding):
@@ -433,9 +426,9 @@ class AdmkSolver:
 
         start_time = cputiming.time()
         ilu = splinalg.spilu(matrix2solve,
-                             drop_tol=self.ctrl.outer_prec_drop_tolerance,
-                       fill_factor=self.ctrl.outer_prec_fillin)
-        if (self.ctrl.verbose>2):
+                             drop_tol=ctrl.outer_prec_drop_tolerance,
+                       fill_factor=ctrl.outer_prec_fillin)
+        if (ctrl.verbose>2):
             print('ILU'+'{:.2f}'.format(-(start_time - cputiming.time()))) 
         prec = lambda x: ilu.solve(x)
         M = splinalg.LinearOperator((tdpot.n_pot,tdpot.n_pot), prec)
@@ -446,8 +439,8 @@ class AdmkSolver:
         start_time = cputiming.time()
         [pot,info_solver.info]=splinalg.bicgstab(
             matrix2solve, rhs2solve, x0=x0,
-            tol=self.ctrl.tolerance_nonlinear, #restart=20,
-            maxiter=self.ctrl.max_linear_iterations,
+            tol=ctrl.tolerance_nonlinear, #restart=20,
+            maxiter=ctrl.max_linear_iterations,
             atol=1e-16,
             M=M,
             callback=info_solver.addone)
@@ -463,11 +456,13 @@ class AdmkSolver:
         info_solver.realres=norm(
             matrix2solve.dot(tdpot.pot)-rhs2solve
         )/norm(rhs2solve)
-        if (self.ctrl.verbose>1):
+        if (ctrl.verbose>1):
             print(info_solver)
         ierr=0
         if (info_solver.info !=0 ) :
             ierr=1
+
+        return ierr
         
 
     def tdens2gfvar(self,tdens):
@@ -492,7 +487,7 @@ class AdmkSolver:
         return tdens
     
     
-    def iterate(self, problem, tdpot, ierr):
+    def iterate(self, problem, tdpot, ctrl):
         """
         Procedure overriding update of parent class(Problem)
         
@@ -504,7 +499,7 @@ class AdmkSolver:
          tdpot : update tdpot from time t^k to t^{k+1} 
 
         """
-        if (self.ctrl.time_discretization_method == 'explicit_tdens'):            
+        if ctrl.time_discretization_method == 'explicit_tdens':            
             # compute update
             grad = problem.potential_gradient(tdpot.pot)
             flux = tdpot.tdens*grad
@@ -516,14 +511,15 @@ class AdmkSolver:
             update=-tdpot.tdens  * (grad * grad) + tdpot.tdens**pmass
 
             # update tdens
-            tdpot.tdens = tdpot.tdens - self.ctrl.deltat * update
+            tdpot.tdens = tdpot.tdens - ctrl.deltat * update
 
-            [tdpot,ierr,self] = self.syncronize(problem,tdpot)
+            ierr = self.syncronize(problem, tdpot, ctrl)  
+            tdpot.time=tdpot.time+ctrl.deltat
+            
+            return ierr
 
             
-            tdpot.time=tdpot.time+self.ctrl.deltat
-            
-        elif (self.ctrl.time_discretization_method == 'explicit_gfvar'):            
+        elif (ctrl.time_discretization_method == 'explicit_gfvar'):            
             # compute update
             gfvar = self.tdens2gfvar(tdpot.tdens) 
             trans_prime = self.gfvar2tdens(gfvar, 1) # 1 means zero derivative so 
@@ -534,15 +530,17 @@ class AdmkSolver:
             print('{:.2E}'.format(min(update))+'<=UPDATE<='+'{:.2E}'.format(max(update)))
 
             # update gfvar and tdens
-            gfvar = gfvar - self.ctrl.deltat * update
+            gfvar = gfvar - ctrl.deltat * update
             tdpot.tdens = self.gfvar2tdens(gfvar, 0) # 0 means zero derivative so 
 
             # compute potential
             [tdpot,ierr,self] = self.syncronize(problem,tdpot)
 
-            tdpot.time=tdpot.time+self.ctrl.deltat    
+            tdpot.time=tdpot.time+ctrl.deltat    
 
-        elif (self.ctrl.time_discretization_method == 'implicit_gfvar'):
+            return ierr
+
+        elif (ctrl.time_discretization_method == 'implicit_gfvar'):
             #shorthand
             n_pot = problem.nrow
             n_tdens = problem.ncol
@@ -569,20 +567,20 @@ class AdmkSolver:
                 
                 f_newton[0:n_pot] = (problem.matrix.dot(tdens*grad_pot) - problem.rhs)
                 f_newton[n_pot:n_pot+n_tdens] = -problem.weight * (
-                    ( gfvar - gfvar_old ) / self.ctrl.deltat
+                    ( gfvar - gfvar_old ) / ctrl.deltat
                     + trans_prime * 0.5* (-grad_pot**2 + 1.0)
                 )
                 f_newton=-f_newton
 
                 # check if convergence is achieved
-                self.info.nonlinear_solver_residuum = np.linalg.norm(f_newton)
+                self.nonlinear_solver_residuum = np.linalg.norm(f_newton)
                 msg=(str(inewton)+
                      ' |F|_pot  = '+'{:.2E}'.format(np.linalg.norm(f_newton[0:n_pot])) +
                      ' |F|_gfvar= '+'{:.2E}'.format(np.linalg.norm(f_newton[n_pot:n_pot+n_tdens])))
-                if (self.ctrl.verbose >= 2 ):
+                if (ctrl.verbose >= 2 ):
                     print(msg)
                 
-                if ( self.info.nonlinear_solver_residuum < self.ctrl.tolerance_nonlinear ) :
+                if ( self.nonlinear_solver_residuum < ctrl.tolerance_nonlinear ) :
                     ierr_newton == 0
                     break
                 
@@ -594,11 +592,11 @@ class AdmkSolver:
 
                 # the minus sign is to get saddle point in standard form
                 diag_C_matrix = problem.weight * (
-                    1.0 / self.ctrl.deltat
+                    1.0 / ctrl.deltat
                     + trans_second * 0.5 * (-grad_pot**2 + 1.0)
                 )
                 msg=('{:.2E}'.format(min(diag_C_matrix))+'<=C <='+'{:.2E}'.format(max(diag_C_matrix)))
-                if (self.ctrl.verbose >= 3 ):
+                if (ctrl.verbose >= 3 ):
                     print(msg)
                 
                 C_matrix = sp.sparse.diags(diag_C_matrix)
@@ -632,49 +630,117 @@ class AdmkSolver:
                     grad_pot = problem.potential_gradient(pot)
 
                     diag_C_matrix = problem.weight * (
-                        1.0 / self.ctrl.deltat
+                        1.0 / ctrl.deltat
                         + trans_second * 0.5*(-grad_pot **2 + 1.0 )
                     )
 
                     # ensure diag(C) beingstrctly positive
-                    if ( np.amin(diag_C_matrix) < self.ctrl.min_C ):
-                        newton_step =  newton_step / self.ctrl.contraction_newton_step
-                        if (newton_step < self.ctrl.min_newton_step):
-                            print('Newton step=',newton_step,'below limit', self.ctrl.min_newton_step)
+                    if ( np.amin(diag_C_matrix) < ctrl.min_C ):
+                        newton_step =  newton_step / ctrl.contraction_newton_step
+                        if (newton_step < ctrl.min_newton_step):
+                            print('Newton step=',newton_step,'below limit', ctrl.min_newton_step)
                             ierr_newton = 2
                             finished = True
                     else:
                          ierr_newton = 0
                          finished = True
                 msg='Newton step='+str(newton_step)
-                if (self.ctrl.verbose >= 3 ):
+                if (ctrl.verbose >= 3 ):
                     print(msg)
                 
                       
                 # count iterations
                 inewton += 1
-                if (inewton == self.ctrl.max_nonlinear_iterations ):
+                if (inewton == ctrl.max_nonlinear_iterations ):
                     ierr_newton = 1
                     # end of newton
-
-
            
 
             # copy the value in tdpot (even if the are wrong)
             tdpot.pot[:] = pot[:]
             tdpot.tdens = self.gfvar2tdens(gfvar,0)
-            tdpot.time = tdpot.time+self.ctrl.deltat
+            tdpot.time = tdpot.time+ctrl.deltat
 
             # store info algorithm
-            self.info.nonlinear_iterations = inewton
+            self.nonlinear_iterations = inewton
 
 
             # pass the newton error (0,1,2)
             ierr = ierr_newton
+
+            return ierr
         else:
-            print('value: self.ctrl.time_discretization_method not supported. Passed:',self.ctrl.time_discretization_method )
+            print('value: ctrl.time_discretization_method not supported. Passed:',ctrl.time_discretization_method )
             ierr = 1
 
+            return ierr
+
             
+    def solve(self, problem, tdpot, ctrl):
+        """
+        Solve the time dependent problem
+        Args:
+            problem: problem object
+            tdpot: solution object
+            ctrl: control object
+        Returns:
+            ierr: error code (0: success)
+        """
+        # Syncronize the potential 
+        ierr = self.syncronize(problem, tdpot, ctrl)
+        
+        # Start main cycle
+        iter = 0
+        while ierr == 0 :
+            """ try to update the sol  """
+            tdpot_old = cp(tdpot)
+            nrestart = 0
+            ierr_iterate = 0
+            while ierr_iterate == 0 :
+                ierr_iterate = self.iterate(problem, tdpot, ctrl)
+                if ierr_iterate == 0:    
+                    break
+                else:
+                    nrestart += 1
+                    if nrestart == ctrl.max_restart:
+                        break
+                    ctrl.deltat = ctrl.deltat / 2.0
 
+            # check if the iteration has been successful    
+            if ierr_iterate !=0 :
+                ierr = 1
+                self.ierr_update = ierr_iterate 
+                
+            
+            # check if the maximum number of iterations has been reached
+            iter += 1
+            if iter == ctrl.max_iter:
+                ierr = 2
+            
+            # Here the user evalutes if convergence is achieved
+            var = (
+                norm(tdpot.tdens - tdpot_old.tdens) /
+                (norm(tdpot.tdens) * ctrl.deltat)
+            )    
+            if (var < 1e-4):
+                ierr = 0
+                break 
+            
+            """ Study state system """
+            grad=problem.potential_gradient(tdpot.pot)
+            
+            if (ctrl.verbose > 0):
+                print(' ')
+                print('var=',var)
+        
+            if (ctrl.verbose > 1):
+                print(' ')
+                print('iter,', iter,'time,',tdpot.time)
+                print('{:.2E}'.format(min(abs(grad))) +
+                    '<=|GRAD| <=' +
+                    '{:.2E}'.format(max(abs(grad))))
+            
+            """ Here user have to set solver controls for next update """
+            ctrl.set_before_iteration()
 
+        return ierr
