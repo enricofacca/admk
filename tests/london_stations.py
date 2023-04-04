@@ -98,8 +98,11 @@ def test_main(verbose=0):
     problem = problem.set_inputs(forcing, 1.0)
     consistency = problem.check_inputs()
     
-    # Init container for transport problem solution (tdens,pot, and flux)
-    tdpot = TdensPotentialVelocity(graph.n_edges,graph.n_nodes)
+    # Init container for transport problem solution with
+    # solution.tdens=edge conductivity
+    # solution.pot=potential
+    # solution.flux=conductivity * potential gradient
+    solution = TdensPotentialVelocity(graph.n_edges,graph.n_nodes)
 
     # Init solver
     admk = AdmkSolver()
@@ -121,7 +124,7 @@ def test_main(verbose=0):
     ctrl.verbose = verbose
     
     # solve
-    ierr = admk.solve(problem, tdpot, ctrl)
+    ierr = admk.solve(problem, solution, ctrl)
 
     # check if convergence is achieved
     return 0
