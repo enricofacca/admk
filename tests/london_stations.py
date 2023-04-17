@@ -115,16 +115,18 @@ def test_main(verbose=0):
     ctrl.max_iter = 1000
     
     # deltat controls
-    ctrl.deltat_control = 'fixed'
+    ctrl.deltat_control = 'expanding'
     ctrl.deltat = 1e-1
-    ctrl.min_deltat = 1e-1
-    ctrl.max_deltat = 1e4
+    ctrl.min_deltat = 1e-2
+    ctrl.max_deltat = 5e-1
     
     # verbosity
     ctrl.verbose = verbose
     
     # solve
     ierr = admk.solve(problem, solution, ctrl)
+
+    print(ierr)
 
     # check if convergence is achieved
     return 0

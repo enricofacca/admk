@@ -302,9 +302,9 @@ class AdmkControls:
         """
         Procedure to set new controls after a succesfull update
         """
-        if (self.deltat_control == 0):
+        if (self.deltat_control == 'fixed'):
             self.deltat = self.deltat
-        elif (self.deltat_control == 1):
+        elif (self.deltat_control == 'expanding'):
             self.deltat = max( min( self.deltat *
                                     self.expansion_deltat, self.max_deltat),
                                self.min_deltat)
@@ -722,7 +722,7 @@ class AdmkSolver:
                 norm(tdpot.tdens - tdpot_old.tdens) /
                 (norm(tdpot.tdens) * ctrl.deltat)
             )    
-            if (var < 1e-4):
+            if (var < 1e-3):
                 ierr = 0
                 break 
             
