@@ -125,8 +125,7 @@ def test_main(verbose=0):
     
     # solve
     ierr = admk.solve(problem, solution, ctrl)
-
-    print(ierr)
+    print('ierr=',ierr,admk.ierr_dictionary(ierr))
 
     # check if convergence is achieved
     return 0

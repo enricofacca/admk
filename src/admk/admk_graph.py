@@ -744,3 +744,14 @@ class AdmkSolver:
             ctrl.set_before_iteration()
 
         return ierr
+
+    def ierr_dictionary(self,ierr):
+        """
+        Return a description of the error
+        """
+        if ierr == 0:
+            return 'No error'
+        if ierr == 1:
+            return 'Error in iterate procedure'
+        if ierr == 2:
+            return 'Maximum number of iterations reached'
