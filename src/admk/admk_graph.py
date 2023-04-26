@@ -10,6 +10,8 @@ from scipy.linalg import norm
 import time as cputiming
 import os
 from .linear_solvers import info_linalg
+from .linear_solvers import implicit_block_diag   
+
 
 
 class TdensPotentialVelocity:
@@ -83,27 +85,26 @@ class MinNorm:
       columns number = number of edges    
     - rhs = right-hand side
     """
-    def __init__(self, matrix, weight=None, matrixT=None):
+    def __init__(self, matrix, weight=None):
         """
         Constructor of problem setup
         """
         self.matrix = matrix
-        self.nrow = matrix.shape[0]
-        self.ncol = matrix.shape[1]
-        if (matrixT is None):
-            self.matrixT=self.matrix.transpose()
-        else:
-            self.matrixT=matrixT
+        self.n_row = matrix.shape[0]
+        self.n_col = matrix.shape[1]
         
+        self.matrixT = self.matrix.transpose()
+        
+
         # edge weight
         if (weight is None):
-            weight = np.ones(len(topol))
+            weight = np.ones(self.n_col)
         self.weight = weight
         self.inv_weight = 1.0/weight
+        
+        matvec = lambda x: self.inv_weight * self.matrixT.dot(x)
+        self.gradient = splinalg.LinearOperator((self.n_col,self.n_row),matvec)    
 
-         # allocate space for inputs 
-        self.rhs=np.zeros(self.nrow)
-        self.q_exponent=1.0
 
     def set_inputs(self,rhs,q_exponent=1.0):
         """
@@ -114,8 +115,23 @@ class MinNorm:
                          A vel = rhs
             q_exponent (real) : exponent q of the norm |vel|^q
         """
-        self.rhs[:]=rhs[:]
-        self.q_exponent=q_exponent
+        print(len(rhs))
+        if (len(rhs) % self.n_row != 0):
+            myError = ValueError(f'Passed rhs.shape[0]={len(rhs):%d} is not a '+
+                                 'multiple of {self.nrow:%d} = nrow')
+            raise myError
+        else:
+            self.n_rhs = len(rhs) // self.n_row
+        print('n_rhs = ',self.n_rhs)
+
+        self.rhs = cp(rhs)
+        self.q_exponent = q_exponent
+
+        if self.n_rhs != 1:
+            self.grad = implicit_block_diag([self.gradient]*self.n_rhs)
+        else:
+            self.grad = self.gradient
+
         return self
     
     def check_inputs(self):
@@ -123,9 +139,12 @@ class MinNorm:
         Method to check problem inputs consistency
         """
         ierr=0
-        if (np.sum(self.rhs)>1e-12):
-            print('Rhs is not balanced')
-            ierr=1
+        for i in range(self.n_rhs):
+            begin = i*self.n_row
+            end = (i+1)*self.n_row
+            if (np.sum(self.rhs[begin:end])>1e-12):
+                print(f'Rhs{i:%d} is not balanced')
+                ierr=1
         return ierr
 
     def potential_gradient(self, pot):
@@ -171,6 +190,11 @@ class Graph:
         
         # graph topology
         self.topol = cp(topol)
+
+        # edge weight
+        if (weight is None):
+            weight = np.ones(self.n_edges)
+        self.weight = weight
 
 
     def signed_incidence_matrix(self):
@@ -320,15 +344,6 @@ class AdmkControls:
         return self
 
         
-
-# Create a class to store solver info 
-class InfoAdmkSolver():
-    def __init__(self):
-        self.linear_solver_iterations = 0
-        # non linear solver
-        self.nonlinear_solver_iterations = 0
-        self.nonlinear_sovler_residum = 0.0
-
         
 class AdmkSolver:
     """
@@ -340,7 +355,7 @@ class AdmkSolver:
     dynamics 
     \dt \Tdens(t)=\Tdens(t) * | \Grad \Pot(\Tdens)|^2 -Tdens^{gamma}    
     """
-    def __init__(self):
+    def __init__(self,problem):
         """
 		Initialize solver with passed controls (or default)
         and initialize structure to store info on solver application
@@ -350,6 +365,34 @@ class AdmkSolver:
         # non linear solver
         self.nonlinear_solver_iterations = 0
         self.nonlinear_solver_residum = 0.0
+
+        self.n_pot = problem.n_row
+        self.n_tdens = problem.n_col
+
+        self.problem = problem
+
+    def vec2mat(self, vec):
+        """
+        Internal procedure to convert vector to matrix
+        """
+        size = len(vec) // self.problem.n_rhs
+        return vec.reshape(size,self.problem.n_rhs, order='F')
+    
+    def mat2vec(self, mat):
+        """
+        Internal procedure to convert matrix to vector
+        """
+        return mat.reshape(self.n_pot*self.n_rhs, 1)
+    
+    def get_ith_pot(self, pot, i):
+        """
+        Internal procedure to get i-th potential
+        """
+        return pot[i*self.n_pot:(i+1)*self.n_pot]
+    
+    def initial_solution(self):
+        sol = TdensPotentialVelocity(self.n_pot*self.problem.n_rhs, self.n_tdens)
+        return sol
 
     
     def build_stiff(self, matrixA, conductivity):
@@ -386,8 +429,9 @@ class AdmkSolver:
         
         start_time = cputiming.time()
         conductivity = tdpot.tdens * problem.inv_weight
-        stiff = self.build_stiff(problem.matrix,conductivity)
+        stiff = self.build_stiff(problem.matrix, conductivity)
         rhs = problem.rhs.copy()
+        n_equ = len(rhs)
 
         msg = ('ASSEMBLY'+'{:.2f}'.format(-(start_time - cputiming.time()))) 
         ctrl.print_info(msg,3)
@@ -395,34 +439,21 @@ class AdmkSolver:
         #
         # solve linear system
         #
-
-        # init counter
-        info_solver = info_linalg()
-        info_solver.resini=norm(stiff*tdpot.pot-problem.rhs)/norm(problem.rhs)
-        
-        # ground solution
-        inode = np.argmax(abs(problem.rhs))
-        grounding=True
-        #grounding=False
+        inode = 1
+        grounding = True
         if (grounding):
             stiff[inode,inode] = 1.0e20
-            rhs[inode] = 0.0
-        else:
-            stiff=stiff#+1e-12*sp.sparse.eye(tdpot.n_pot)
-            
-        # scaling=True
-        scaling =False
-        if ( scaling ):
-            d=stiff.diagonal()
-            diag_sqrt=sp.sparse.diags(1.0/np.sqrt(d))
+            for i_rhs in range(self.problem.n_rhs):
+                rhs[inode+i_rhs*self.n_pot] = 0.0
 
-            matrix2solve  = diag_sqrt*(stiff*diag_sqrt)
-            rhs2solve     = diag_sqrt*rhs
-            x0            = diag_sqrt*tdpot.pot
         else:
-            matrix2solve = stiff
-            rhs2solve    = rhs
-            x0           = tdpot.pot
+            stiff=stiff
+
+        # create block diagonal matrix
+        matrix2solve = stiff
+        if (self.problem.n_rhs>1):
+            matrix2solve = sp.sparse.block_diag([matrix2solve]*problem.n_rhs)
+
 
         start_time = cputiming.time()
         ilu = splinalg.spilu(matrix2solve,
@@ -431,35 +462,26 @@ class AdmkSolver:
         if (ctrl.verbose>2):
             print('ILU'+'{:.2f}'.format(-(start_time - cputiming.time()))) 
         prec = lambda x: ilu.solve(x)
-        M = splinalg.LinearOperator((tdpot.n_pot,tdpot.n_pot), prec)
-
-        
+        M = splinalg.LinearOperator((n_equ,n_equ), prec)
         
         # solve linear system
         start_time = cputiming.time()
-        [pot,info_solver.info]=splinalg.bicgstab(
-            matrix2solve, rhs2solve, x0=x0,
+        [pot,ierr] = splinalg.bicgstab(
+            matrix2solve, rhs, x0=tdpot.pot,
             tol=ctrl.tolerance_nonlinear, #restart=20,
             maxiter=ctrl.max_linear_iterations,
             atol=1e-16,
-            M=M,
-            callback=info_solver.addone)
+            M=M)
         
-        if (scaling) :
-            pot=diag_sqrt*pot
-            rhs2solve=np.sqrt(d)*rhs2solve
-            print('LINSOL'+'{:.2f}'.format(
-                -(start_time - cputiming.time())))
-
         tdpot.pot[:]=pot[:]
+
+        print(pot[0:4])
+        print(tdpot.pot[self.n_pot:self.n_pot+4])
         # compute res residuum
-        info_solver.realres=norm(
-            matrix2solve.dot(tdpot.pot)-rhs2solve
-        )/norm(rhs2solve)
         if (ctrl.verbose>1):
-            print(info_solver)
+            pass#print(info_solver)
         ierr=0
-        if (info_solver.info !=0 ) :
+        if (ierr !=0 ) :
             ierr=1
 
         return ierr
@@ -501,16 +523,25 @@ class AdmkSolver:
         """
         if ctrl.time_discretization_method == 'explicit_tdens':            
             # compute update
-            grad = problem.potential_gradient(tdpot.pot)
-            flux = tdpot.tdens*grad
-            res = problem.matrix*flux-problem.rhs
-            print(sp.linalg.norm(res))
+            grad_pot = problem.grad.dot(tdpot.pot)
+            
             
             #print('{:.2E}'.format(min(normgrad))+'<=GRAD<='+'{:.2E}'.format(max(normgrad)))
-            pmass=problem.q_exponent/(2-problem.q_exponent)
-            update=-tdpot.tdens  * (grad * grad) + tdpot.tdens**pmass
+            pmass = problem.q_exponent/(2-problem.q_exponent)
+            grad_pot_sq = grad_pot**2
+            print('n_rhs',self.problem.n_rhs)
+            if (self.problem.n_rhs==1):
+                grad_pot_sq_sum = grad_pot_sq
+            else:
+                mat = self.vec2mat(grad_pot_sq)
+                print('grad 0',mat[0:4,0],grad_pot_sq[0:4])
+                print('grad 1',mat[0:4,1],grad_pot_sq[self.n_tdens:self.n_tdens+4])
+                print('mat size',mat.shape)
+                grad_pot_sq_sum = np.sum(mat,axis=1)
+                print('size ',grad_pot_sq_sum.shape,grad_pot_sq_sum[0:4])
+            update = -tdpot.tdens  * grad_pot_sq_sum + tdpot.tdens**pmass
 
-            # update tdens
+            # update tdgrad_poens
             tdpot.tdens = tdpot.tdens - ctrl.deltat * update
 
             ierr = self.syncronize(problem, tdpot, ctrl)  
@@ -727,7 +758,8 @@ class AdmkSolver:
                 break 
             
             """ Study state system """
-            grad=problem.potential_gradient(tdpot.pot)
+            grad = problem.grad.dot(tdpot.pot)
+            grad_matrix = self.vec2mat(grad**2)
             
             if (ctrl.verbose > 0):
                 print(' ')
@@ -736,9 +768,16 @@ class AdmkSolver:
             if (ctrl.verbose > 1):
                 print(' ')
                 print('iter,', iter,'time,',tdpot.time)
-                print('{:.2E}'.format(min(abs(grad))) +
-                    '<=|GRAD| <=' +
-                    '{:.2E}'.format(max(abs(grad))))
+                grad_pot_sq_sum = np.sum(grad_matrix,axis=1)
+                print(
+                        f'{min(grad_pot_sq_sum):.2E}'
+                        +f'<=sum |GRAD|<='
+                        +f'{max(grad_pot_sq_sum):.2E}')
+                for i in range(problem.n_rhs):
+                    print(
+                        f'{min(abs(grad_matrix[:,i])):.2E}'
+                        +f'<=|GRAD|_{i:d} <='
+                        +f'{max(abs(grad_matrix[:,i])):.2E}')
             
             """ Here user have to set solver controls for next update """
             ctrl.set_before_iteration()
