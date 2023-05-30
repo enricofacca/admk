@@ -105,7 +105,7 @@ class MinNorm:
         matvec = lambda x: self.inv_weight * self.matrixT.dot(x)
         self.gradient = splinalg.LinearOperator((self.n_col,self.n_row),matvec)    
 
-        self.set_time_varing_inputs = False
+        self.time_varing_inputs = False
 
     # def set_inputs(self,rhs,q_exponent=1.0):
     #     """
@@ -140,9 +140,9 @@ class MinNorm:
         Work in place procedure to set a rhs and q_exponent. 
         They may be function of time that are time varying
         """
-        if callable(rhs):
+        if callable(rhs_of_time):
             self.rhs_of_time = rhs_of_time
-            self.set_time_varing_inputs = True
+            self.time_varing_inputs = True
         else:
             # define a constant in time rhs
             self.rhs_of_time = lambda t: rhs_of_time
@@ -161,7 +161,7 @@ class MinNorm:
 
         if callable(q_exponent):
             self.q_exponent_of_time = q_exponent
-            self.set_time_varing_inputs = True
+            self.time_varing_inputs = True
         else:
             # define a constant in time exponent
             self.q_exponent_of_time = lambda t: q_exponent
@@ -171,23 +171,26 @@ class MinNorm:
         ierr = self.check_inputs()
         if (ierr != 0):
             print('Error in inputs at time t=',sample_time)
+
+        if self.n_rhs != 1:
+            self.grad = implicit_block_diag([self.gradient]*self.n_rhs)
+        else:
+            self.grad = self.gradient
     
     def update_inputs(self,time):
         """
         Update inputs at time t
         """
-        if not self.set_time_varing_inputs:
-            # nothing to do, evertyhing was done in the 
-            # set_inputs method
-            return self
-        else:
+        # nothing to if self.time_varing_inputs is False
+        # see set_inputs procedure
+        if self.time_varing_inputs:            
             # update and check the inputs 
             self.rhs = self.rhs_of_time(time)
             self.q_exponent = self.q_exponent_of_time(time)
+
             ierr = self.check_inputs()
             if (ierr != 0):
-                print('Error in inputs at time t=',time)
-        return self
+                raise ValueError('Error in inputs at time t=',time)
         
     
     def check_inputs(self):
@@ -198,8 +201,9 @@ class MinNorm:
         for i in range(self.n_rhs):
             begin = i*self.n_row
             end = (i+1)*self.n_row
-            if (np.sum(self.rhs[begin:end])>1e-12):
-                print(f'Rhs{i:%d} is not balanced')
+            balance = np.sum(self.rhs[begin:end])/np.linalg.norm(self.rhs[begin:end])
+            if balance > 1e-11:
+                print(f'Rhs{i:d} is not balanced {balance:.1E}')
                 ierr=1
         return ierr
 
@@ -427,24 +431,7 @@ class AdmkSolver:
 
         self.problem = problem
 
-    def vec2mat(self, vec):
-        """
-        Internal procedure to convert vector to matrix
-        """
-        size = len(vec) // self.problem.n_rhs
-        return vec.reshape(size,self.problem.n_rhs, order='F')
     
-    def mat2vec(self, mat):
-        """
-        Internal procedure to convert matrix to vector
-        """
-        return mat.reshape(self.n_pot*self.n_rhs, 1)
-    
-    def get_ith_pot(self, pot, i):
-        """
-        Internal procedure to get i-th potential
-        """
-        return pot[i*self.n_pot:(i+1)*self.n_pot]
     
     def initial_solution(self):
         sol = TdensPotentialVelocity(self.n_pot*self.problem.n_rhs, self.n_tdens)
@@ -487,8 +474,8 @@ class AdmkSolver:
         conductivity = tdpot.tdens * problem.inv_weight
         stiff = self.build_stiff(problem.matrix, conductivity)
         rhs = problem.rhs.copy()
-        n_equ = len(rhs)
 
+        n_equ = len(rhs)
         msg = ('ASSEMBLY'+'{:.2f}'.format(-(start_time - cputiming.time()))) 
         ctrl.print_info(msg,3)
     
@@ -531,8 +518,6 @@ class AdmkSolver:
         
         tdpot.pot[:]=pot[:]
 
-        print(pot[0:4])
-        print(tdpot.pot[self.n_pot:self.n_pot+4])
         # compute res residuum
         if (ctrl.verbose>1):
             pass#print(info_solver)
@@ -581,20 +566,15 @@ class AdmkSolver:
             # compute update
             grad_pot = problem.grad.dot(tdpot.pot)
             
-            
             #print('{:.2E}'.format(min(normgrad))+'<=GRAD<='+'{:.2E}'.format(max(normgrad)))
             pmass = problem.q_exponent/(2-problem.q_exponent)
             grad_pot_sq = grad_pot**2
-            print('n_rhs',self.problem.n_rhs)
             if (self.problem.n_rhs==1):
                 grad_pot_sq_sum = grad_pot_sq
             else:
-                mat = self.vec2mat(grad_pot_sq)
-                print('grad 0',mat[0:4,0],grad_pot_sq[0:4])
-                print('grad 1',mat[0:4,1],grad_pot_sq[self.n_tdens:self.n_tdens+4])
-                print('mat size',mat.shape)
+                mat = vec2mat(grad_pot_sq, problem.n_rhs)
                 grad_pot_sq_sum = np.sum(mat,axis=1)
-                print('size ',grad_pot_sq_sum.shape,grad_pot_sq_sum[0:4])
+
             update = -tdpot.tdens  * grad_pot_sq_sum + tdpot.tdens**pmass
 
             # update tdgrad_poens
@@ -784,8 +764,8 @@ class AdmkSolver:
             nrestart = 0
             ierr_iterate = 0
             while ierr_iterate == 0 :
-                if problem.time_varing_inputs:
-                    problem.update_inputs(tdpot.time)
+                # update inputs if time varying
+                problem.update_inputs(tdpot.time)
 
                 ierr_iterate = self.iterate(problem, tdpot, ctrl)
                 if ierr_iterate == 0:    
@@ -818,7 +798,7 @@ class AdmkSolver:
             
             """ Study state system """
             grad = problem.grad.dot(tdpot.pot)
-            grad_matrix = self.vec2mat(grad**2)
+            grad_matrix = vec2mat(grad**2,problem.n_rhs)
             
             if (ctrl.verbose > 0):
                 print(' ')
@@ -853,3 +833,24 @@ class AdmkSolver:
             return 'Error in iterate procedure'
         if ierr == 2:
             return 'Maximum number of iterations reached'
+
+def vec2mat(vec, n_rhs):
+    """
+    Internal procedure to convert vector to matrix
+    """
+    size = len(vec) // n_rhs
+    return vec.reshape(size, n_rhs, order='F')
+    
+def mat2vec(mat):
+    """
+    Procedure to convert matrix to vector
+    """
+    n_rows, n_columns = mat.shape
+    return mat.reshape(n_rows*n_columns, 1)
+    
+def get_portion(pot, n_portion, i):
+    """
+    Internal procedure to get i-th potential
+    """
+    n_pot = len(pot) // n_portion
+    return pot[i*n_pot:(i+1)*n_pot]

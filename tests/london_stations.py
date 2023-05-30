@@ -96,10 +96,12 @@ def test_main(verbose=0):
     print(incidence_matrix_transpose.size)
     problem = MinNorm(incidence_matrix_transpose, weight)
 
-    # set problem inputs (forcing loads, powers, etc) and check 
+    # TIME VARYING FORCING: both defintions should work
     def time_varying_forcing(t):
-        return forcing*sin(2*pi*t)
+        return forcing*np.sin(2*np.pi*t)
+    # time_varying_forcing = forcing
 
+    # set problem inputs (forcing loads, powers, etc) and upda 
     problem.set_inputs(time_varying_forcing, 1.0)
     
     # Init container for transport problem solution with
@@ -121,7 +123,7 @@ def test_main(verbose=0):
     ctrl.max_iter = 200
     
     # deltat controls
-    ctrl.deltat_control = 'expanding'
+    ctrl.deltat_control = 'fixed'#'expanding'
     ctrl.deltat = 1e-1
     ctrl.min_deltat = 1e-2
     ctrl.max_deltat = 5e-1
