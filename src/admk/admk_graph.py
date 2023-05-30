@@ -51,7 +51,7 @@ class TdensPotentialVelocity:
         self.tdens = np.ones(n_tdens)
         if ( not tdens0 is None):
             # dimension mismatch
-            if ( not length(tdens0)==self.n_tdens):
+            if not length(tdens0) == self.n_tdens:
                 myError = ValueError(f'Passed length(tdens0)={len(tdens0):%d} !='+
                                      ' {len(tdens0):%d} = n_tdens')
                 raise myError
@@ -70,7 +70,7 @@ class TdensPotentialVelocity:
                 raise myError
             self.pot[:]=pot0[:]
         self.time=0.0
-        if ( not pot0 is None):
+        if ( not time0 is None):
             self.time=time0
         
 class MinNorm:
@@ -105,34 +105,90 @@ class MinNorm:
         matvec = lambda x: self.inv_weight * self.matrixT.dot(x)
         self.gradient = splinalg.LinearOperator((self.n_col,self.n_row),matvec)    
 
+        self.set_time_varing_inputs = False
 
-    def set_inputs(self,rhs,q_exponent=1.0):
-        """
-        Method to set problem inputs.
+    # def set_inputs(self,rhs,q_exponent=1.0):
+    #     """
+    #     Method to set problem inputs.
 
-        Args:
-            rhs (real) : vector on the right-hand side of equation
-                         A vel = rhs
-            q_exponent (real) : exponent q of the norm |vel|^q
+    #     Args:
+    #         rhs (real) : vector on the right-hand side of equation
+    #                      A vel = rhs
+    #         q_exponent (real) : exponent q of the norm |vel|^q
+    #     """
+    #     print(len(rhs))
+    #     if (len(rhs) % self.n_row != 0):
+    #         myError = ValueError(f'Passed rhs.shape[0]={len(rhs):%d} is not a '+
+    #                              'multiple of {self.nrow:%d} = nrow')
+    #         raise myError
+    #     else:
+    #         self.n_rhs = len(rhs) // self.n_row
+    #     print('n_rhs = ',self.n_rhs)
+
+    #     self.rhs = cp(rhs)
+    #     self.q_exponent = q_exponent
+
+    #     if self.n_rhs != 1:
+    #         self.grad = implicit_block_diag([self.gradient]*self.n_rhs)
+    #     else:
+    #         self.grad = self.gradient
+
+    #     return self
+    
+    def set_inputs(self, rhs_of_time, q_exponent=1.0, sample_time=0.0):
         """
-        print(len(rhs))
-        if (len(rhs) % self.n_row != 0):
-            myError = ValueError(f'Passed rhs.shape[0]={len(rhs):%d} is not a '+
+        Work in place procedure to set a rhs and q_exponent. 
+        They may be function of time that are time varying
+        """
+        if callable(rhs):
+            self.rhs_of_time = rhs_of_time
+            self.set_time_varing_inputs = True
+        else:
+            # define a constant in time rhs
+            self.rhs_of_time = lambda t: rhs_of_time
+
+        # We set the rhs at the sample time
+        # to get the number of rhs and fix the rhs 
+        # if fix in time
+        self.rhs = self.rhs_of_time(sample_time)
+        if (len(self.rhs) % self.n_row != 0):
+            myError = ValueError(f'Passed rhs.shape[0]={len(self.rhs):%d} is not a '+
                                  'multiple of {self.nrow:%d} = nrow')
             raise myError
         else:
-            self.n_rhs = len(rhs) // self.n_row
-        print('n_rhs = ',self.n_rhs)
+            self.n_rhs = len(self.rhs) // self.n_row
 
-        self.rhs = cp(rhs)
-        self.q_exponent = q_exponent
 
-        if self.n_rhs != 1:
-            self.grad = implicit_block_diag([self.gradient]*self.n_rhs)
+        if callable(q_exponent):
+            self.q_exponent_of_time = q_exponent
+            self.set_time_varing_inputs = True
         else:
-            self.grad = self.gradient
+            # define a constant in time exponent
+            self.q_exponent_of_time = lambda t: q_exponent
+        # We set the exponent at the sample time
+        self.q_exponent = self.q_exponent_of_time(sample_time)
 
+        ierr = self.check_inputs()
+        if (ierr != 0):
+            print('Error in inputs at time t=',sample_time)
+    
+    def update_inputs(self,time):
+        """
+        Update inputs at time t
+        """
+        if not self.set_time_varing_inputs:
+            # nothing to do, evertyhing was done in the 
+            # set_inputs method
+            return self
+        else:
+            # update and check the inputs 
+            self.rhs = self.rhs_of_time(time)
+            self.q_exponent = self.q_exponent_of_time(time)
+            ierr = self.check_inputs()
+            if (ierr != 0):
+                print('Error in inputs at time t=',time)
         return self
+        
     
     def check_inputs(self):
         """
@@ -690,7 +746,7 @@ class AdmkSolver:
             # copy the value in tdpot (even if the are wrong)
             tdpot.pot[:] = pot[:]
             tdpot.tdens = self.gfvar2tdens(gfvar,0)
-            tdpot.time = tdpot.time+ctrl.deltat
+            tdpot.time += ctrl.deltat
 
             # store info algorithm
             self.nonlinear_iterations = inewton
@@ -728,6 +784,9 @@ class AdmkSolver:
             nrestart = 0
             ierr_iterate = 0
             while ierr_iterate == 0 :
+                if problem.time_varing_inputs:
+                    problem.update_inputs(tdpot.time)
+
                 ierr_iterate = self.iterate(problem, tdpot, ctrl)
                 if ierr_iterate == 0:    
                     break

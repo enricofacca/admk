@@ -97,8 +97,10 @@ def test_main(verbose=0):
     problem = MinNorm(incidence_matrix_transpose, weight)
 
     # set problem inputs (forcing loads, powers, etc) and check 
-    problem = problem.set_inputs(forcing, 1.0)
-    consistency = problem.check_inputs()
+    def time_varying_forcing(t):
+        return forcing*sin(2*pi*t)
+
+    problem.set_inputs(time_varying_forcing, 1.0)
     
     # Init container for transport problem solution with
     # solution.tdens=edge conductivity
