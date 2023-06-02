@@ -139,6 +139,11 @@ class MinNorm:
         """
         Work in place procedure to set a rhs and q_exponent. 
         They may be function of time that are time varying
+        args:
+        rhs_of_time: a numpy-array of size (size=npot*nrhs)
+           or a function that, given a time t, return a numpy array
+        q_exponent: a scalar or a function that, given a time t, 
+           return a scalar
         """
         if callable(rhs_of_time):
             self.rhs_of_time = rhs_of_time
