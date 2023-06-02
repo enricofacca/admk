@@ -330,6 +330,10 @@ class AdmkControls:
         """
         Set the controls of the Dmk algorithm
         """
+        #: real: lower bound for tdens
+        self.min_tdens = 1e-8
+
+        
         #: character: time discretization approach
         self.time_discretization_method = 'explicit_tdens'
 
@@ -584,6 +588,8 @@ class AdmkSolver:
 
             # update tdgrad_poens
             tdpot.tdens = tdpot.tdens - ctrl.deltat * update
+
+            tdpot.tdens[np.where(tdpot.tdens<ctrl.min_tdens)]=ctrl.min_tdens
 
             ierr = self.syncronize(problem, tdpot, ctrl)  
             tdpot.time=tdpot.time+ctrl.deltat
