@@ -77,15 +77,15 @@ def test_main(verbose=0):
     admk.solve(problem, tdpot, ctrl)
 
     # get mu, pot, vel
-    pot, mu, vel = tdpot.get_otp_solution(problem)
+    u, mu, vel = tdpot.get_otp_solution(problem)
 
     # shift potential to get zero at the root node
-    pot -= pot[0] 
+    u -= u[0] 
 
     # print results
     if verbose > 0:
-        print('The potential pot in this case is minus the distance from the first node')
-        print(f'{pot=}')
+        print('The potential u in this case is minus the distance from the first node')
+        print(f'{u=}')
         print('The transport density mu count the mass passing throught each edge')
         print(f'{mu=}')
         print('The velocity=mu gradient (pot) describes the flux of mass')
