@@ -72,6 +72,11 @@ class TdensPotentialVelocity:
         self.time=0.0
         if ( not time0 is None):
             self.time=time0
+
+    def get_otp_solution(self,problem):
+        vel = self.tdens * (problem.grad * self.pot)
+        return self.pot, self.tdens, vel
+    
         
 class MinNorm:
     """
@@ -107,33 +112,6 @@ class MinNorm:
 
         self.time_varing_inputs = False
 
-    # def set_inputs(self,rhs,q_exponent=1.0):
-    #     """
-    #     Method to set problem inputs.
-
-    #     Args:
-    #         rhs (real) : vector on the right-hand side of equation
-    #                      A vel = rhs
-    #         q_exponent (real) : exponent q of the norm |vel|^q
-    #     """
-    #     print(len(rhs))
-    #     if (len(rhs) % self.n_row != 0):
-    #         myError = ValueError(f'Passed rhs.shape[0]={len(rhs):%d} is not a '+
-    #                              'multiple of {self.nrow:%d} = nrow')
-    #         raise myError
-    #     else:
-    #         self.n_rhs = len(rhs) // self.n_row
-    #     print('n_rhs = ',self.n_rhs)
-
-    #     self.rhs = cp(rhs)
-    #     self.q_exponent = q_exponent
-
-    #     if self.n_rhs != 1:
-    #         self.grad = implicit_block_diag([self.gradient]*self.n_rhs)
-    #     else:
-    #         self.grad = self.gradient
-
-    #     return self
     
     def set_inputs(self, rhs_of_time, q_exponent=1.0, sample_time=0.0):
         """
@@ -158,7 +136,7 @@ class MinNorm:
         self.rhs = self.rhs_of_time(sample_time)
         if (len(self.rhs) % self.n_row != 0):
             myError = ValueError(f'Passed rhs.shape[0]={len(self.rhs):%d} is not a '+
-                                 'multiple of {self.nrow:%d} = nrow')
+                                 'multiple of {self.n_row:%d} = nrow')
             raise myError
         else:
             self.n_rhs = len(self.rhs) // self.n_row
@@ -620,8 +598,8 @@ class AdmkSolver:
 
         elif (ctrl.time_discretization_method == 'implicit_gfvar'):
             #shorthand
-            n_pot = problem.nrow
-            n_tdens = problem.ncol
+            n_pot = problem.n_row
+            n_tdens = problem.n_col
             
             # pass in gfvar varaible
             gfvar_old = self.tdens2gfvar(tdpot.tdens)
