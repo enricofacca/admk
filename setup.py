@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python
 # -*- encoding: utf-8 -*-
 
@@ -75,6 +76,7 @@ setup(
         'rcis>=0.2.0',
         'numpy>=1.19.0',
         'scipy>=1.5.0',
+        'petsc4py',
     ],
     extras_require={
         # eg:
