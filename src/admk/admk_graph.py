@@ -9,74 +9,73 @@ import scipy.sparse.linalg as splinalg
 from scipy.linalg import norm 
 import time as cputiming
 import os
-from .linear_solvers import info_linalg
 from .linear_solvers import implicit_block_diag   
 
 
+from .linear_solvers import info_ksp
+from .linear_solvers import get_info
+from .linear_solvers import KSPReasons
+from petsc4py import PETSc
 
-class TdensPotentialVelocity:
-    """This class contains roblem solution tdens,pot and vel such that
 
-    vel = diag(tdens) W^{-1} A^T pot
+# class TdensPotentialVelocity:
+#     """This class contains roblem solution tdens,pot and vel such that
+
+#     vel = diag(tdens) W^{-1} A^T pot
     
-    """
-    def __init__(self, n_tdens,n_pot, tdens0=None, pot0=None,time0=None):
-        """
-        Constructor of TdensPotential class, containing unkonws
-        tdens, pot, flux
+#     """
+#     def __init__(self, n_tdens,n_pot, tdens0=None, pot0=None,time0=None):
+#         """
+#         Constructor of TdensPotential class, containing unkonws
+#         tdens, pot, flux
 
-        Args:
-            n_tdens (int) : length of tdens unknow
-            n_pot (int) : length of pot unknow
-            tdens0 (real) : non-negative initial tdens solution. Default: tdens=1.0 
-            pot0 (real) : initial pot solution. Default: pot=0.0
-            time0 (real) : initial pot solution. Default: time=0.0
+#         Args:
+#             n_tdens (int) : length of tdens unknow
+#             n_pot (int) : length of pot unknow
+#             tdens0 (real) : non-negative initial tdens solution. Default: tdens=1.0 
+#             pot0 (real) : initial pot solution. Default: pot=0.0
+#             time0 (real) : initial pot solution. Default: time=0.0
         
-        Raise:
-        ValueError
+#         Raise:
+#         ValueError
 
-        Example:
-        graph_dmk=GraphDmk(np.array([0,1],[1,2]))
-        tpdot=TdensPotential(graph_dmk,tdens0=np.ones(2),pot0=np.zeros(3))
+#         Example:
+#         graph_dmk=GraphDmk(np.array([0,1],[1,2]))
+#         tpdot=TdensPotential(graph_dmk,tdens0=np.ones(2),pot0=np.zeros(3))
         
-        """
-        #: Array size
+#         """
+#         #: Array size
         
-        #: int: Number of tdens variable 
-        self.n_tdens = n_tdens
-        #: int: Number of tdens variable 
-        self.n_pot = n_pot
+#         #: int: Number of tdens variable 
+#         self.n_tdens = n_tdens
+#         #: int: Number of tdens variable 
+#         self.n_pot = n_pot
 
-        #: Tdens array
-        self.tdens = np.ones(n_tdens)
-        if ( not tdens0 is None):
-            # dimension mismatch
-            if not length(tdens0) == self.n_tdens:
-                myError = ValueError(f'Passed length(tdens0)={len(tdens0):%d} !='+
-                                     ' {len(tdens0):%d} = n_tdens')
-                raise myError
-            # negative values
-            if ( any.tdens0 < 0 ) :
-                myError = ValueError(f'tdens0 has negative entries')
-                raise myError
-            # set value
-            self.tdens[:]=tdens0[:]
-        self.pot=np.zeros(n_pot)
-        if ( not pot0 is None):
-            # dimension mismatch
-            if ( not length(pot0)==self.n_pot):
-                myError = ValueError(f'Passed length(pot0)={len(pot0):%d} !='+
-                                     ' {len(pot0):%d} = n_pot')
-                raise myError
-            self.pot[:]=pot0[:]
-        self.time=0.0
-        if ( not time0 is None):
-            self.time=time0
-
-    def get_otp_solution(self,problem):
-        vel = self.tdens * (problem.grad * self.pot)
-        return self.pot, self.tdens, vel
-    
+#         #: Tdens array
+#         self.tdens = np.ones(n_tdens)
+#         if ( not tdens0 is None):
+#             # dimension mismatch
+#             if not length(tdens0) == self.n_tdens:
+#                 myError = ValueError(f'Passed length(tdens0)={len(tdens0):%d} !='+
+#                                      ' {len(tdens0):%d} = n_tdens')
+#                 raise myError
+#             # negative values
+#             if ( any.tdens0 < 0 ) :
+#                 myError = ValueError(f'tdens0 has negative entries')
+#                 raise myError
+#             # set value
+#             self.tdens[:]=tdens0[:]
+#         self.pot=np.zeros(n_pot)
+#         if ( not pot0 is None):
+#             # dimension mismatch
+#             if ( not length(pot0)==self.n_pot):
+#                 myError = ValueError(f'Passed length(pot0)={len(pot0):%d} !='+
+#                                      ' {len(pot0):%d} = n_pot')
+#                 raise myError
+#             self.pot[:]=pot0[:]
+#         self.time=0.0
+#         if ( not time0 is None):
+#             self.time=time0
         
 class MinNorm:
     """
@@ -88,9 +87,16 @@ class MinNorm:
     - A signed incidence matrix of graph G
       rows number = number of nodes
       columns number = number of edges    
-    - rhs = right-hand side
+    - rhs_of_time = right-hand side. it can be a function of time
+    - q_exponent = exponent of the norm
+    - weight = weight in the norm
+    - initial_time = initial rhs in case of time varying
     """
-    def __init__(self, matrix, weight=None):
+    def __init__(self, matrix,
+                    rhs_of_time, 
+                    q_exponent=1.0, 
+                    weight=None,
+                    initial_time=0.0):
         """
         Constructor of problem setup
         """
@@ -99,7 +105,8 @@ class MinNorm:
         self.n_col = matrix.shape[1]
         
         self.matrixT = self.matrix.transpose()
-        
+
+
 
         # edge weight
         if (weight is None):
@@ -113,16 +120,7 @@ class MinNorm:
         self.time_varing_inputs = False
 
     
-    def set_inputs(self, rhs_of_time, q_exponent=1.0, sample_time=0.0):
-        """
-        Work in place procedure to set a rhs and q_exponent. 
-        They may be function of time that are time varying
-        args:
-        rhs_of_time: a numpy-array of size (size=npot*nrhs)
-           or a function that, given a time t, return a numpy array
-        q_exponent: a scalar or a function that, given a time t, 
-           return a scalar
-        """
+        # set forcing term
         if callable(rhs_of_time):
             self.rhs_of_time = rhs_of_time
             self.time_varing_inputs = True
@@ -130,10 +128,12 @@ class MinNorm:
             # define a constant in time rhs
             self.rhs_of_time = lambda t: rhs_of_time
 
-        # We set the rhs at the sample time
+        self.initial_time = initial_time
+            
+        # We set the rhs at the initial time
         # to get the number of rhs and fix the rhs 
         # if fix in time
-        self.rhs = self.rhs_of_time(sample_time)
+        self.rhs = self.rhs_of_time(initial_time)
         if (len(self.rhs) % self.n_row != 0):
             myError = ValueError(f'Passed rhs.shape[0]={len(self.rhs):%d} is not a '+
                                  'multiple of {self.n_row:%d} = nrow')
@@ -148,12 +148,12 @@ class MinNorm:
         else:
             # define a constant in time exponent
             self.q_exponent_of_time = lambda t: q_exponent
-        # We set the exponent at the sample time
-        self.q_exponent = self.q_exponent_of_time(sample_time)
+        # We set the exponent at the initial time
+        self.q_exponent = self.q_exponent_of_time(initial_time)
 
         ierr = self.check_inputs()
         if (ierr != 0):
-            print('Error in inputs at time t=',sample_time)
+            print('Error in inputs at time t=',initial_time)
 
         if self.n_rhs != 1:
             self.grad = implicit_block_diag([self.gradient]*self.n_rhs)
@@ -265,7 +265,7 @@ class Graph:
 
     def save_time_series(self):
         import meshio
-
+        
         points=coord
         cells=[("line", topol)]
         mesh = meshio.Mesh(
@@ -280,7 +280,8 @@ class Graph:
         file_xdmf=meshio.xdmf.TimeSeriesWriter('grid2.xdmf')
         file_xdmf.__enter__()
         file_xdmf.write_points_cells(points, cells)
-        file_xdmf.write_data(0.0, point_data={"pot": tdpot.pot})
+        
+        file_xdmf.write_data(0.0, point_data={"pot": pot})
         file_xdmf.__exit__()
 
 
@@ -291,57 +292,164 @@ class Graph:
             #file_xdmf=meshio.xdmf.TimeSeriesWriter(filename,data_format='HDF')
             #file_xdmf.__enter__()
             #file_xdmf.write_points_cells(points, cells)
-        
-    
+
+#
+# following code is taken from firedrake
+#           
+def flatten_parameters(parameters, sep="_"):
+    """Flatten a nested parameters dict, joining keys with sep.
+
+    :arg parameters: a dict to flatten.
+    :arg sep: separator of keys.
+
+    Used to flatten parameter dictionaries with nested structure to a
+    flat dict suitable to pass to PETSc.  For example:
+
+    .. code-block:: python3
+
+       flatten_parameters({"a": {"b": {"c": 4}, "d": 2}, "e": 1}, sep="_")
+       => {"a_b_c": 4, "a_d": 2, "e": 1}
+
+    If a "prefix" key already ends with the provided separator, then
+    it is not used to concatenate the keys.  Hence:
+
+    .. code-block:: python3
+
+       flatten_parameters({"a_": {"b": {"c": 4}, "d": 2}, "e": 1}, sep="_")
+       => {"a_b_c": 4, "a_d": 2, "e": 1}
+       # rather than
+       => {"a__b_c": 4, "a__d": 2, "e": 1}
+    """
+    new = type(parameters)()
+
+    if not len(parameters):
+        return new
+
+    def flatten(parameters, *prefixes):
+        """Iterate over nested dicts, yielding (*keys, value) pairs."""
+        sentinel = object()
+        try:
+            option = sentinel
+            for option, value in parameters.items():
+                # Recurse into values to flatten any dicts.
+                for pair in flatten(value, option, *prefixes):
+                    yield pair
+            # Make sure zero-length dicts come back.
+            if option is sentinel:
+                yield (prefixes, parameters)
+        except AttributeError:
+            # Non dict values are just returned.
+            yield (prefixes, parameters)
+
+    def munge(keys):
+        """Ensure that each intermediate key in keys ends in sep.
+
+        Also, reverse the list."""
+        for key in reversed(keys[1:]):
+            if len(key) and not key.endswith(sep):
+                yield key + sep
+            else:
+                yield key
+        else:
+            yield keys[0]
+
+    for keys, value in flatten(parameters):
+        option = "".join(map(str, munge(keys)))
+        if option in new:
+            print("Ignoring duplicate option: %s (existing value %s, new value %s)",
+                    option, new[option], value)
+        new[option] = value
+    return new
+
+
+def nested_set(dic, keys, value, create_missing=True):
+    d = dic
+    for key in keys[:-1]:
+        if key in d:
+            d = d[key]
+        elif create_missing:
+            d = d.setdefault(key, {})
+        else:
+            return dic
+    if keys[-1] in d or create_missing:
+        d[keys[-1]] = value
+    return dic
 
 class AdmkControls:
     """
     Class with Admk Solver 
     """
+
     def __init__(self,
-                 deltat=0.01,
-                 approach_linear_solver='bicgstab',
-                 max_linear_iterations=1000,
-                 tolerance_linear=1e-9,
-                 max_nonlinear_iterations=30,
-                 tolerance_nonlinear=1e-10):
+                 tol_optimization = 1e-3,
+                 tol_constraint = 1e-8,
+                 method='explicit_tdens',
+                 max_iter = 200,
+                 max_restart = 5,
+                 method_ctrl = None,
+                 verbose=0,
+                 log=0,
+                 log_file='admk.log'
+    ):        
         """
-        Set the controls of the Dmk algorithm
+        Set the controls of the Dmk solver
         """
-        #: real: lower bound for tdens
-        self.min_tdens = 1e-8
+        self.tol_opt = tol_optimization
+        self.tol_constraint = tol_constraint
+        self.max_iter = max_iter
+        self.max_restart = max_restart
+        self.method = method
+        #: info on standard output
+        self.verbose=verbose
+        #: info on log file
+        self.log=log
+        self.log=log_file
 
-        
-        #: character: time discretization approach
-        self.time_discretization_method = 'explicit_tdens'
 
-        #: real: time step size
-        self.max_iter = 100
-        self.deltat = deltat
-
-        # option to adapt time step:
-        # fixed : fixed time step
-        # expand : adaptive time step according to expansion_deltat
-        # contract : adaptive time step according to error
-        self.deltat_control = 'fixed'
-        self.min_deltat = 1e-2
-        self.max_deltat = 1e+2
-        self.expansion_deltat = 2
-
-        self.max_restart = 2
-        
-        #: int: max number of Krylov solver iterations
-        self.max_linear_iterations = max_linear_iterations
-        #: str: Krylov solver approach
-        self.approach_linear_solver = approach_linear_solver
-        #: real: Krylov solver tolerance
-        self.tolerance_linear = tolerance_linear
-        
-        #: real: nonlinear solver iteration
-        self.tolerance_nonlinear = tolerance_nonlinear
-
-        #: int: Max number of nonlinear solver iterations 
-        self.max_nonlinear_iterations = 20
+        self.time_discretization_method = self.method
+        # methods speficific controls
+        if self.method == 'explicit_tdens':
+            self.method_ctrl =  {
+                # global controls
+                'tdens_min' : 1e-8,
+                # time stepping controls
+                'deltat' : {'initial': 0.01,
+                            'control': 'fixed',
+                            'min':1e-4,
+                            'max':1e0,
+                            'expansion': 1.05,
+                            'contraction': 2.0,
+                },
+                # linear solver controls 
+                'ksp': {
+                    'type':'cg',
+                    'rtol': tol_constraint
+                },
+                'pc':{
+                    'type': 'hypre',
+                    # used if for ilu only 
+                    'factor_drop_tolerance':{
+                        'dt': 1e-4,
+                        'maxrowcount': 30
+                    }
+                },
+                'relax_Laplacian': 1e-10,
+                # saving of evolution
+                'save':{
+                    'sol': {
+                        'directory': './runs/',
+                        # 'no','some','last'
+                        'mode':'no',
+                        'frequency': 10,
+                    },
+                    'matrices': {
+                        'directory': './runs/matrices/',
+                        'mode':'no',
+                        'frequency': 10,
+                    }
+                }
+            }
+        self.deltat = self.method_ctrl['deltat']['initial']
         
         #: real: minimum newton step
         self.min_newton_step = 5e-2
@@ -354,12 +462,18 @@ class AdmkControls:
         #: Drop tolerance for incomplete factorization
         self.outer_prec_drop_tolerance=1e-4
 
-        #: info on standard output
-        self.verbose=0
-        #: info on log file
-        self.save_log=0
-        self.file_log='admk.log'
-
+        
+    def set_method_ctrl(self, keys, value):
+        if not isinstance(keys, list):
+            keys=[keys]
+        
+        self.method_ctrl = nested_set(self.method_ctrl,keys,value)
+        
+        #for key in keys[:-1]:
+        #    self.method_ctrl = self.method_ctrl.setdefault(key, {})
+        #self.method_ctrl[keys[-1]] = value
+        
+        
     def print_info(self, msg, priority):
         """
 	    Print messagge to stdout and to log 
@@ -373,12 +487,15 @@ class AdmkControls:
         """
         Procedure to set new controls after a succesfull update
         """
-        if (self.deltat_control == 'fixed'):
+        deltat_ctrl = self.method_ctrl['deltat']
+        if (deltat_ctrl['control'] == 'fixed'):
             self.deltat = self.deltat
-        elif (self.deltat_control == 'expanding'):
-            self.deltat = max( min( self.deltat *
-                                    self.expansion_deltat, self.max_deltat),
-                               self.min_deltat)
+        elif (deltat_ctrl['control'] == 'expanding'):
+            self.deltat *= deltat_ctrl['expansion']
+            self.deltat = max( min( self.deltat, deltat_ctrl['max']),deltat_ctrl['min'])
+        else:
+            raise ValueError("deltat['control'] not supported")
+                
         return self
 
     def reset_after_failure(self,ierr):
@@ -418,11 +535,33 @@ class AdmkSolver:
 
         self.problem = problem
 
+        self.time = problem.initial_time
     
     
     def initial_solution(self):
-        sol = TdensPotentialVelocity(self.n_pot*self.problem.n_rhs, self.n_tdens)
+        sol = np.ones(self.n_pot*self.problem.n_rhs+self.n_tdens)
         return sol
+
+    def get_otp_solution(self, sol):
+        pot, tdens = self.subfunctions(sol)
+        vel = tdens *  (self.problem.grad.dot(pot))
+        return pot, tdens, vel
+    
+
+    def subfunctions(self,sol):
+        """
+        Split solution in pot, tdens component
+        """
+        pot = sol[:self.n_pot * self.problem.n_rhs]
+        tdens = sol[-self.n_tdens:]
+        return pot, tdens 
+
+    
+    def get_subpotential(self, solution, index):
+        """
+        Return the potential associated to index-th commodity
+        """
+        return sol.pot[index*self.n_pot:index*self.n_pot]
 
     
     def build_stiff(self, matrixA, conductivity):
@@ -452,13 +591,15 @@ class AdmkSolver:
         tdpot : syncronized to fill contraint S(tdens) pot = rhs
         info  : control flag (=0 if everthing worked)
         """
+        pot, tdens = self.subfunctions(tdpot)
 		
         # assembly stiff
-        msg = (f'{min(tdpot.tdens):.2E}<=TDENS<={max(tdpot.tdens):.2E}')
+        msg = (f'{min(tdens):.2E}<=TDENS<={max(tdens):.2E}')
         ctrl.print_info(msg, 3)
+
         
         start_time = cputiming.time()
-        conductivity = tdpot.tdens * problem.inv_weight
+        conductivity = tdens * problem.inv_weight
         stiff = self.build_stiff(problem.matrix, conductivity)
         rhs = problem.rhs.copy()
 
@@ -468,42 +609,83 @@ class AdmkSolver:
     
         #
         # solve linear system
-        #
-        inode = 1
-        grounding = True
-        if (grounding):
-            stiff[inode,inode] = 1.0e20
-            for i_rhs in range(self.problem.n_rhs):
-                rhs[inode+i_rhs*self.n_pot] = 0.0
-
-        else:
-            stiff=stiff
-
-        # create block diagonal matrix
-        matrix2solve = stiff
-        if (self.problem.n_rhs>1):
-            matrix2solve = sp.sparse.block_diag([matrix2solve]*problem.n_rhs)
-
-
-        start_time = cputiming.time()
-        ilu = splinalg.spilu(matrix2solve,
-                             drop_tol=ctrl.outer_prec_drop_tolerance,
-                       fill_factor=ctrl.outer_prec_fillin)
-        if (ctrl.verbose>2):
-            print('ILU'+'{:.2f}'.format(-(start_time - cputiming.time()))) 
-        prec = lambda x: ilu.solve(x)
-        M = splinalg.LinearOperator((n_equ,n_equ), prec)
+        #        
+        relax=ctrl.method_ctrl['relax_Laplacian']
+        stiff += relax * sp.sparse.eye(self.n_pot) # matrix is singular
+        petsc_stiff = PETSc.Mat().createAIJ(size=stiff.shape,
+                                            csr=(stiff.indptr, stiff.indices,
+                                                stiff.data))
         
-        # solve linear system
-        start_time = cputiming.time()
-        [pot,ierr] = splinalg.bicgstab(
-            matrix2solve, rhs, x0=tdpot.pot,
-            tol=ctrl.tolerance_nonlinear, #restart=20,
-            maxiter=ctrl.max_linear_iterations,
-            atol=1e-16,
-            M=M)
+        petsc_pot = petsc_stiff.createVecLeft()
+        petsc_rhs = petsc_stiff.createVecRight()
         
-        tdpot.pot[:]=pot[:]
+
+        problem_prefix = 'laplacian_solver_'
+        ksp = PETSc.KSP().create()
+        ksp.setOperators(petsc_stiff)
+        ksp.setOptionsPrefix(problem_prefix)
+        
+        # copy from https://github.com/FEniCS/dolfinx/blob/230e027269c0b872c6649f053e734ed7f49b6962/python/dolfinx/fem/petsc.py#L618
+        # https://github.com/FEniCS/dolfinx/fem/petsc.py
+        opts = PETSc.Options()    
+        opts.prefixPush(problem_prefix)
+
+        # merge two linear algebra dict.
+        # and flatten to match PETSC syntacts
+        # TODO: {**a,**b} merges the dict.
+        # I did not find how to get a sub
+        petsc_options = (flatten_parameters({
+            **{'ksp' :ctrl.method_ctrl.get('ksp')},
+            **{'pc' : ctrl.method_ctrl.get('pc')}
+        }))
+        for k, v in petsc_options.items():
+            opts[k] = v
+        opts.prefixPop()
+        ksp.setConvergenceHistory()
+        ksp.setFromOptions()            
+        petsc_stiff.setOptionsPrefix(problem_prefix)
+        petsc_stiff.setFromOptions()
+        petsc_pot.setOptionsPrefix(problem_prefix)
+        
+        petsc_rhs.setFromOptions()
+
+            
+            
+        iter=0
+        res=0
+        pres=0
+        for i_rhs in range(self.problem.n_rhs):
+            # solve separately different rhs
+            rhs_i = rhs[i_rhs*self.n_pot:(i_rhs+1)*self.n_pot]
+            petsc_rhs.setArray(rhs_i)
+            ksp.solve(petsc_rhs, petsc_pot)
+
+            # store info
+            reason = ksp.getConvergedReason()
+            if reason < 0:
+                print (f'{KSPReasons[reason]=}')
+                ierr = 1
+                return
+            else:
+                last_iter = ksp.getIterationNumber() 
+                h = ksp.getConvergenceHistory()
+                resvec = h[-(last_iter+1):]
+                last_pres = ksp.getResidualNorm()
+                iter+=last_iter
+                res=max(res,resvec[-1])
+                pres=max(pres,last_pres)
+
+            # get solution
+            pot_i = petsc_pot.getArray()
+            tdpot[i_rhs * self.n_pot : (i_rhs+1) * self.n_pot] = pot_i
+
+        # info
+        if ctrl.verbose >=2 :
+            msg=(f'{ksp.getOptionsPrefix()}'
+                 +f' it={int(iter/self.problem.n_rhs):04d}'
+                 +f' max(res)={res:.1e}'
+                 +f' max(pres)={last_pres:.1e}')
+            print(msg)
 
         # compute res residuum
         if (ctrl.verbose>1):
@@ -535,6 +717,43 @@ class AdmkSolver:
         else:
             print('Derivative order not supported')
         return tdens
+
+    def build_fnewton_gfvar(self, problem, pot, gfvar, gfvar_old, ctrl):
+        # assembly nonlinear equation
+        # F_pot=f_newton[1:n_pot]= stiff * pot - rhs
+        # F_pot=f_newton[1+n_pot:n_pot + n_tdens] = -weight (gfvar-gfvar_old)/deltat + \grad \Lyapunov        
+        tdens = self.gfvar2tdens(gfvar, 0) # 1 means first derivative
+        trans_prime = self.gfvar2tdens(gfvar, 1) # 1 means first derivative
+        trans_second = self.gfvar2tdens(gfvar, 2) # 2 means second derivative
+        grad_pot = problem.potential_gradient(pot)
+
+        
+        f_newton = np.zeros(npot+ntdens)
+        
+        f_newton[0:n_pot] = (problem.matrix.dot(tdens*grad_pot) - problem.rhs)
+        f_newton[n_pot:n_pot+n_tdens] = -problem.weight * (
+            ( gfvar - gfvar_old ) / ctrl.deltat
+            + trans_prime * 0.5* (-grad_pot**2 + 1.0)
+        )
+        return -f_newton
+
+    def build_jacobian_gfvar(self,problem, pot, gfvar, ctrl):
+        # assembly jacobian
+        conductivity = tdens*problem.inv_weight
+        A_matrix = self.build_stiff(problem.matrix, conductivity)
+        B_matrix = sp.sparse.diags(trans_prime * grad_pot).dot(problem.matrixT)
+        BT_matrix = B_matrix.transpose()
+
+        # the minus sign is to get saddle point in standard form
+        diag_C_matrix = problem.weight * (
+            1.0 / ctrl.deltat
+            + trans_second * 0.5 * (-grad_pot**2 + 1.0)
+        )
+        C_matrix = sp.sparse.diags(diag_C_matrix)
+        msg=('{:.2E}'.format(min(diag_C_matrix))+'<=C <='+'{:.2E}'.format(max(diag_C_matrix)))
+        if (ctrl.verbose >= 3 ):
+            print(msg)
+        return A_matrix,B_matrix,BT_matrix,C_matrix
     
     
     def iterate(self, problem, tdpot, ctrl):
@@ -551,7 +770,8 @@ class AdmkSolver:
         """
         if ctrl.time_discretization_method == 'explicit_tdens':            
             # compute update
-            grad_pot = problem.grad.dot(tdpot.pot)
+            pot, tdens = self.subfunctions(tdpot)
+            grad_pot = problem.grad.dot(pot)
             
             #print('{:.2E}'.format(min(normgrad))+'<=GRAD<='+'{:.2E}'.format(max(normgrad)))
             pmass = problem.q_exponent/(2-problem.q_exponent)
@@ -562,24 +782,33 @@ class AdmkSolver:
                 mat = vec2mat(grad_pot_sq, problem.n_rhs)
                 grad_pot_sq_sum = np.sum(mat,axis=1)
 
-            update = -tdpot.tdens  * grad_pot_sq_sum + tdpot.tdens**pmass
+            update = -tdens  * grad_pot_sq_sum + tdens**pmass
 
+            msg=f'{min(update):.2e}<=UPDATE<={max(update):.2e}, deltat={ctrl.deltat:.2e}'
+            if ctrl.verbose >= 2:
+                print(msg)
+            
+            
             # update tdgrad_poens
-            tdpot.tdens = tdpot.tdens - ctrl.deltat * update
+            tdens = tdens - ctrl.deltat * update
 
-            tdpot.tdens[np.where(tdpot.tdens<ctrl.min_tdens)]=ctrl.min_tdens
+            tdens_min = ctrl.method_ctrl['tdens_min']
+            tdens[np.where(tdens < tdens_min)] = tdens_min
 
+            tdpot[-self.n_tdens:] = tdens
+            
             ierr = self.syncronize(problem, tdpot, ctrl)  
-            tdpot.time=tdpot.time+ctrl.deltat
+            
             
             return ierr
 
             
         elif (ctrl.time_discretization_method == 'explicit_gfvar'):            
             # compute update
-            gfvar = self.tdens2gfvar(tdpot.tdens) 
+            pot, tdens = self.subfunctions(sol) 
+            gfvar = self.tdens2gfvar(tdens) 
             trans_prime = self.gfvar2tdens(gfvar, 1) # 1 means zero derivative so 
-            grad = problem.potential_gradient(tdpot.pot)
+            grad = problem.potential_gradient(pot)
 
 
             update = - trans_prime * (grad * grad) +  trans_prime
@@ -587,12 +816,12 @@ class AdmkSolver:
 
             # update gfvar and tdens
             gfvar = gfvar - ctrl.deltat * update
-            tdpot.tdens = self.gfvar2tdens(gfvar, 0) # 0 means zero derivative so 
+            tdens = self.gfvar2tdens(gfvar, 0) # 0 means zero derivative so 
 
             # compute potential
             [tdpot,ierr,self] = self.syncronize(problem,tdpot)
 
-            tdpot.time=tdpot.time+ctrl.deltat    
+            self.time=self.time+ctrl.deltat    
 
             return ierr
 
@@ -602,9 +831,10 @@ class AdmkSolver:
             n_tdens = problem.n_col
             
             # pass in gfvar varaible
-            gfvar_old = self.tdens2gfvar(tdpot.tdens)
+            pot, tdens = self.subfunctions(sol)
+            gfvar_old = self.tdens2gfvar(tdens)
             gfvar = cp(gfvar_old)
-            pot   = cp(tdpot.pot)
+            pot   = cp(pot)
             
             f_newton = np.zeros(n_pot+n_tdens)
             increment = np.zeros(n_pot+n_tdens)
@@ -615,18 +845,19 @@ class AdmkSolver:
             while (ierr_newton == 0):
                 # assembly nonlinear equation
                 # F_pot=f_newton[1:n_pot]= stiff * pot - rhs
-                # F_pot=f_newton[1+n_pot:n_pot + n_tdens] = -weight (gfvar-gfvar_old)/deltat + \grad \Lyapunov 
+                # F_pot=f_newton[1+n_pot:n_pot + n_tdens] = -weight (gfvar-gfvar_old)/deltat + \grad \Lyapunov
                 tdens = self.gfvar2tdens(gfvar, 0) # 1 means first derivative
                 trans_prime = self.gfvar2tdens(gfvar, 1) # 1 means first derivative
                 trans_second = self.gfvar2tdens(gfvar, 2) # 2 means second derivative
                 grad_pot = problem.potential_gradient(pot)
-                
+
+    
                 f_newton[0:n_pot] = (problem.matrix.dot(tdens*grad_pot) - problem.rhs)
                 f_newton[n_pot:n_pot+n_tdens] = -problem.weight * (
                     ( gfvar - gfvar_old ) / ctrl.deltat
                     + trans_prime * 0.5* (-grad_pot**2 + 1.0)
                 )
-                f_newton=-f_newton
+                f_newton = -f_newtonf_newton
 
                 # check if convergence is achieved
                 self.nonlinear_solver_residuum = np.linalg.norm(f_newton)
@@ -651,11 +882,22 @@ class AdmkSolver:
                     1.0 / ctrl.deltat
                     + trans_second * 0.5 * (-grad_pot**2 + 1.0)
                 )
-                msg=('{:.2E}'.format(min(diag_C_matrix))+'<=C <='+'{:.2E}'.format(max(diag_C_matrix)))
-                if (ctrl.verbose >= 3 ):
-                    print(msg)
-                
                 C_matrix = sp.sparse.diags(diag_C_matrix)
+                
+
+                if (ctrl.save_newton_matrices > 0):
+                    base = f'time{self.current_iter:05d}_newton{inewton:05d}'
+                    scipy.sparse.save_npz(base+'_A', A, compressed=True)
+                    scipy.sparse.save_npz(base+'_B1T', B_matrix, compressed=True)
+                    scipy.sparse.save_npz(base+'_B2T', BT_matrix, compressed=True)
+                    scipy.sparse.save_npz(base+'_C', C_matrix, compressed=True)
+                    np.save(base+'_pot_rhs',f_newton[0:n_pot])
+                    np.save(base+'_gfvar_rhs',f_newton[n_pot:npot+ntdens])
+                    np.save(base+'_pot',pot)
+                    np.save(base+'_gfvar',f_newton[0:n_pot])
+                    
+                            
+                
                 inv_C_matrix = sp.sparse.diags(1.0/diag_C_matrix)
 
                 
@@ -713,9 +955,9 @@ class AdmkSolver:
            
 
             # copy the value in tdpot (even if the are wrong)
-            tdpot.pot[:] = pot[:]
-            tdpot.tdens = self.gfvar2tdens(gfvar,0)
-            tdpot.time += ctrl.deltat
+            sol[:self.n_pot] = pot
+            sol[self.n_pot:] = self.gfvar2tdens(gfvar,0)
+            self.time += ctrl.deltat
 
             # store info algorithm
             self.nonlinear_iterations = inewton
@@ -754,7 +996,7 @@ class AdmkSolver:
             ierr_iterate = 0
             while ierr_iterate == 0 :
                 # update inputs if time varying
-                problem.update_inputs(tdpot.time)
+                problem.update_inputs(self.time)
 
                 ierr_iterate = self.iterate(problem, tdpot, ctrl)
                 if ierr_iterate == 0:    
@@ -777,25 +1019,26 @@ class AdmkSolver:
                 ierr = 2
             
             # Here the user evalutes if convergence is achieved
+            pot_old, tdens_old = self.subfunctions(tdpot_old)
+            pot, tdens = self.subfunctions(tdpot)
             var = (
-                norm(tdpot.tdens - tdpot_old.tdens) /
-                (norm(tdpot.tdens) * ctrl.deltat)
+                norm(tdens - tdens_old) /
+                (norm(tdens) * ctrl.deltat)
             )    
             if (var < 1e-3):
                 ierr = 0
                 break 
             
             """ Study state system """
-            grad = problem.grad.dot(tdpot.pot)
+            grad = problem.grad.dot(pot)
             grad_matrix = vec2mat(grad**2,problem.n_rhs)
             
             if (ctrl.verbose > 0):
-                print(' ')
-                print('var=',var)
+                print(f'it={iter} var={var:.2e}')
         
             if (ctrl.verbose > 1):
                 print(' ')
-                print('iter,', iter,'time,',tdpot.time)
+                print('it=,', iter,'t=,',self.time)
                 grad_pot_sq_sum = np.sum(grad_matrix,axis=1)
                 print(
                         f'{min(grad_pot_sq_sum):.2E}'

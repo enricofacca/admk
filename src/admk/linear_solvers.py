@@ -3,7 +3,12 @@ import scipy.sparse.linalg as splinalg
 #from scipy import linalg
 import time as cputiming
 import os
-
+from petsc4py import PETSc
+def _make_reasons(reasons):
+    return dict([(getattr(reasons, r), r)
+                 for r in dir(reasons) if not r.startswith('_')])
+SNESReasons = _make_reasons(PETSc.SNES.ConvergedReason())
+KSPReasons = _make_reasons(PETSc.KSP.ConvergedReason())
 
 class info_linalg:
     """
@@ -117,27 +122,100 @@ def identity_apply(x):
     return x
         
     
-# class sparse_solver:
-#     """
-#     Class for the application of inverse of sparse matrices
-#     """
-#     def __init__(self,matrix,ctrl):
-#         if ( ctrl.approach == 'direct' ):
+class SaddlePointPreconditioner():
+    def __init__(self, A,B1T,B2,C):
+        self.A = A
+        self.B1T = B1T
+        self.B2 = B2
+        self.C = C
+
+    def setup(approach='primal', prec_type='full',
+              inv_SchurPrimal=None,inv_C=None,
+              inv_A=None, inv_SchurDual=None):
+        self.approach = approach
+        self.prec_type = prec_type
+        if approach == 'primal':
+            if inv_SchurPrimal is None:
+                exit()
+            else:
+                self.inv_SchurPrimal = inv_SchurPrimal
             
-#         if ( ctrl.approach == 'incomplete' ):
+            if inv_C is None:
+                exit()
+            else:
+                self.inv_C = inv_C
+        elif approach == 'dual':
+            if inv_SchurDual is None:
+                exit()
+            else:
+                self.inv_SchurDual = inv_SchurDual
+            
+            if inv_A is None:
+                exit()
+            else:
+                self.inv_A = inv_A
+        else:
+            exit()
+
+        prec = lambda x: self.apply(x)
+        return splinalg.LinearOperator((n+m,n+m), prec)
+  
+            
+    def apply(x):
+        n = self.n
+        m = self.m
+        y = np.zeros(n+m)
         
+        if self.approach == 'primal' and self.prec_type == 'diag':
+            y[0:n] = self.inv_SchurPrimal(x[0:n])
+            y[n:n+m] = self.inv_C(x[n:n+m])
+        
+        if self.approach == 'primal' and self.prec_type == 'full':
+            # v = C^{-1} x_m
+            self.temp[n:n+m] = self.inv_C(x[n:n+m])
+            # w = B1T * C ^{-1} x_m 
+            self.temp2[0:n] = self.B1T(self.temp[n:n+m])
+            self.temp2[0:n] += x[0:n]
+            y[0:n] = self.inv_SchurPrimal(self.temp2[0:n])
+            
+        if self.approach == 'primal' and self.prec_type == 'lower':
+            pass
+        if self.approach == 'primal' and self.prec_type == 'upper':
+            pass
+            
+        if self.approach == 'dual' and self.prec_type == 'diag':
+            y[0:n] = self.inv_A(x[0:n])
+            y[n:n+m] = self.inv_SchurDual(x[n:n+m])
+            
+        if self.approach == 'dual' and self.prec_type == 'full':
+            pass
+        if self.approach == 'dual' and self.prec_type == 'lower':
+            pass
+        if self.approach == 'dual' and self.prec_type == 'upper':
+            pass
 
+def get_info(ksp):
+    """
+    Return infos
+    """
+    reason = ksp.getConvergedReason()
+    iterations = ksp.getIterationNumber() 
+    h=ksp.getConvergenceHistory()
+    resvec = h[-(iterations+1):]
+    last_pres = ksp.getResidualNorm()
+    return [reason,iterations,resvec,last_pres]
 
-#     def apply(self,rhs):
-
-#         return solution
-
-#     def kill(self):
-
-#ilu_prec = KrylovSolver(A,[0,1,1,2,2,0]{'ksp_tpye':'preconly','pc_type':'ilu'})
-#ilu_block = implicit_blk_diag([ilu_prec],[range()])[0,1,1,2,2,0]
-
-
+def info_ksp(ksp):
+    """
+    Return a one-line string with main info about last linear system solved
+    """
+    info = get_info(ksp)
+    reason,iterations,residuals,last_pres = info
+    last_pres = ksp.getResidualNorm()
+    return str(ksp.getOptionsPrefix())+f' {KSPReasons[reason]} {iterations} {residuals[0]:.1e} {residuals[-1]:.1e} pres {last_pres:.1e}' 
+    
+    
+        
 class KrylovSolver():
     def __init__(self, matrix, ctrl, prec = None):
         default_ctrl = {
@@ -219,3 +297,38 @@ class KrylovSolver():
         
 
         
+        # else:
+        #     inode = 1
+        #     grounding = True
+        #     if (grounding):
+        #         stiff[inode,inode] = 1.0e20
+        #         for i_rhs in range(self.problem.n_rhs):
+        #             rhs[inode+i_rhs*self.n_pot] = 0.0
+            
+        #     stiff=stiff
+
+        #     # create block diagonal matrix
+        #     matrix2solve = stiff
+        #     if (self.problem.n_rhs>1):
+        #         matrix2solve = sp.sparse.block_diag([matrix2solve]*problem.n_rhs)
+
+
+        #     start_time = cputiming.time()
+        #     ilu = splinalg.spilu(matrix2solve,
+        #                      drop_tol=ctrl.outer_prec_drop_tolerance,
+        #                      fill_factor=ctrl.outer_prec_fillin)
+        #     if (ctrl.verbose>2):
+        #         print('ILU'+'{:.2f}'.format(-(start_time - cputiming.time()))) 
+        #     prec = lambda x: ilu.solve(x)
+        #     M = splinalg.LinearOperator((n_equ,n_equ), prec)
+            
+        #     # solve linear system
+        #     start_time = cputiming.time()
+        #     [pot,ierr] = splinalg.bicgstab(
+        #         matrix2solve, rhs, x0=tdpot.pot,
+        #         tol=ctrl.tolerance_nonlinear, #restart=20,
+        #         maxiter=ctrl.max_linear_iterations,
+        #         atol=1e-16,
+        #         M=M)
+        
+        #     tdpot.pot[:]=pot[:]
