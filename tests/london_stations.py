@@ -8,10 +8,8 @@ import os
 sys.path.append('../src/')
 from admk import Graph
 from admk import MinNorm
-from admk import TdensPotentialVelocity
 from admk import AdmkControls
 from admk import AdmkSolver
-
 
 import numpy as np
 from scipy.linalg import norm 
@@ -94,43 +92,58 @@ def test_main(verbose=0):
     
     # Init problem (same graph)
     print(incidence_matrix_transpose.size)
-    problem = MinNorm(incidence_matrix_transpose, weight)
-
+    
     # TIME VARYING FORCING: both defintions should work
     def time_varying_forcing(t):
         return forcing*np.sin(2*np.pi*t)
     # time_varying_forcing = forcing
+    problem = MinNorm(incidence_matrix_transpose,
+                      rhs_of_time=time_varying_forcing,
+                      q_exponent=1.0,
+                      weight=weight)
 
-    # set problem inputs (forcing loads, powers, etc) and upda 
-    problem.set_inputs(time_varying_forcing, 1.0)
-    
-    # Init container for transport problem solution with
-    # solution.tdens=edge conductivity
-    # solution.pot=potential
-    # solution.flux=conductivity * potential gradient
-    
 
-    # Init solver
+    # Init solver and admk solution
     admk = AdmkSolver(problem)
-    solution = TdensPotentialVelocity(admk.n_tdens, admk.n_pot*admk.problem.n_rhs)
+    solution = admk.initial_solution()
     
 
-    # Init solver controls
-    ctrl = AdmkControls()
-    
-    # mehtod and max_iter
-    ctrl.time_discretization_method = 'explicit_tdens'
-    ctrl.max_iter = 200
+    # Init solver controls to default
+    ctrl = AdmkControls(tol_optimization = 1e-3,
+                        tol_constraint = 1e-8,
+                        method='explicit_tdens',
+                        max_iter = 1000,
+                        max_restart = 5,
+                        verbose=1,
+                        log=0,
+                        log_file='admk.log')
     
     # deltat controls
-    ctrl.deltat_control = 'fixed'#'expanding'
-    ctrl.deltat = 1e-1
-    ctrl.min_deltat = 1e-2
-    ctrl.max_deltat = 5e-1
+    ctrl.set_method_ctrl('deltat',{
+        'control':'fixed',
+        'initial': 5e-1,
+        'min': 1e-2,
+        'max': 5e-1,
+        'expansion': 1.05,
+        'contraction': 2.0
+    }
+    )
+    # linear solver
+    # matrix is singualr. we need to relax it with + relax*identity 
+    ctrl.set_method_ctrl('relax_Laplacian',1e-10)
+    ctrl.set_method_ctrl(['ksp','type'],'cg')
+    ctrl.set_method_ctrl(['pc','type'],'icc')
+    ctrl.set_method_ctrl(['pc','factor_drop_tolerance','dt'],1e-4)
+
     
-    # verbosity
-    ctrl.verbose = verbose
+    ctrl.approach_linear_solver = 'direct'
+    # large fillin and low drop tolerance its like having a direct solver
+    ctrl.outer_prec_fillin = 30
+    ctrl.outer_prec_drop_tolerance = 1e-5
+
     
+    
+
     # solve
     ierr = admk.solve(problem, solution, ctrl)
     print('ierr=',ierr,admk.ierr_dictionary(ierr))

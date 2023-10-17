@@ -8,7 +8,6 @@ import os
 sys.path.append('../src/')
 from admk import Graph
 from admk import MinNorm
-from admk import TdensPotentialVelocity
 from admk import AdmkControls
 from admk import AdmkSolver
 
@@ -53,31 +52,47 @@ def test_main(verbose=0):
     E_matrix=incidence_matrix.transpose()
 
     # Init problem inputs (rhs, q, exponent)
-    problem = MinNorm(E_matrix, weight)
-    problem.set_inputs(rhs,1.0)# 1.0 become is Optimal Transport
-    consistency = problem.check_inputs()
+    problem = MinNorm(E_matrix,  rhs, q_exponent=1.0, weight=weight)
     
-    # Init tdpot varaibles (mu,u) in the manuscript
-    tdpot = TdensPotentialVelocity(graph.n_edges,graph.n_nodes)
-
+    
     # Init solver
     admk = AdmkSolver(problem)
+    tdpot = admk.initial_solution()
 
-    # Set solver controls
-    ctrl = AdmkControls()
-    ctrl.deltat = 1.0
-    ctrl.deltat_control = 1
-    ctrl.min_deltat = 1e-1
-    ctrl.max_deltat = 1e4
-    ctrl.verbose = verbose
-    ctrl.time_discretization_method = 'explicit_gfvar'
-    ctrl.time_discretization_method = 'implicit_gfvar'
+    # Init solver controls to default
+    ctrl = AdmkControls(tol_optimization = 1e-3,
+                        tol_constraint = 1e-8,
+                        method='explicit_tdens',
+                        max_iter = 1000,
+                        max_restart = 5,
+                        verbose=0,
+                        log=0,
+                        log_file='admk.log')
+    
+    # Tuning methods
+    ctrl.set_method_ctrl('deltat',{
+        'control':'expanding',
+        'initial': 1e-1,
+        'min': 1e-2,
+        'max': 5e-1,
+        'expansion': 1.05,
+        'contraction': 2.0
+    }
+    )
+    # linear solver
+    # matrix is singualr. we need to relax it with + relax*identity 
+    ctrl.set_method_ctrl('relax_Laplacian',1e-10)
+    ctrl.set_method_ctrl(['ksp','type'],'cg')
+    ctrl.set_method_ctrl(['pc','type'],'icc')
+    ctrl.set_method_ctrl(['pc','factor_drop_tolerance','dt'],1e-4)
+
+    
     
     # run solver (tdpot is changed in place)
     admk.solve(problem, tdpot, ctrl)
 
     # get mu, pot, vel
-    u, mu, vel = tdpot.get_otp_solution(problem)
+    u, mu, vel = admk.get_otp_solution(tdpot)
 
     # shift potential to get zero at the root node
     u -= u[0] 
