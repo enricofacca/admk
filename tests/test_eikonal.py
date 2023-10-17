@@ -82,8 +82,8 @@ def test_main(verbose=0):
     # linear solver
     # matrix is singualr. we need to relax it with + relax*identity 
     ctrl.set_method_ctrl('relax_Laplacian',1e-10)
-    ctrl.set_method_ctrl(['ksp','type'],'cg')
-    ctrl.set_method_ctrl(['pc','type'],'icc')
+    ctrl.set_method_ctrl(['ksp','type'],'preonly')
+    ctrl.set_method_ctrl(['pc','type'],'lu')
     ctrl.set_method_ctrl(['pc','factor_drop_tolerance','dt'],1e-4)
 
     

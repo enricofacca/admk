@@ -667,12 +667,14 @@ class AdmkSolver:
                 ierr = 1
                 return
             else:
-                last_iter = ksp.getIterationNumber() 
-                h = ksp.getConvergenceHistory()
-                resvec = h[-(last_iter+1):]
-                last_pres = ksp.getResidualNorm()
+                last_iter = ksp.getIterationNumber()
                 iter+=last_iter
-                res=max(res,resvec[-1])
+                h = ksp.getConvergenceHistory()
+                if len(h)>0:
+                    resvec = h[-(last_iter+1):]
+                    res=max(res,resvec[-1])
+                
+                last_pres = ksp.getResidualNorm()
                 pres=max(pres,last_pres)
 
             # get solution
