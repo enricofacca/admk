@@ -119,10 +119,10 @@ def test_main(verbose=0):
     
     # deltat controls
     ctrl.set_method_ctrl('deltat',{
-        'control':'fixed',
+        'control':'expanding',
         'initial': 1e-2,
         'min': 1e-2,
-        'max': 5e-1,
+        'max': 1e-1,
         'expansion': 1.05,
         'contraction': 2.0
     }
