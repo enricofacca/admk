@@ -82,6 +82,7 @@ def test_main(verbose=0):
         forcing[node2ind[root_node]] = -mass
         forcings.append(forcing)
 
+    forcings = forcings * 11
 
     forcing = np.concatenate(forcings)
    
@@ -90,12 +91,10 @@ def test_main(verbose=0):
     incidence_matrix = graph.signed_incidence_matrix()
     incidence_matrix_transpose = incidence_matrix.transpose()
     
-    # Init problem (same graph)
-    print(incidence_matrix_transpose.size)
     
     # TIME VARYING FORCING: both defintions should work
     def time_varying_forcing(t):
-        return forcing*np.sin(2*np.pi*t)
+        return forcing*np.sin(np.pi/2+20*np.pi*t)
     # time_varying_forcing = forcing
     problem = MinNorm(incidence_matrix_transpose,
                       rhs_of_time=time_varying_forcing,
@@ -112,7 +111,7 @@ def test_main(verbose=0):
     ctrl = AdmkControls(tol_optimization = 1e-3,
                         tol_constraint = 1e-8,
                         method='explicit_tdens',
-                        max_iter = 1000,
+                        max_iter = 2000,
                         max_restart = 5,
                         verbose=1,
                         log=0,
@@ -121,7 +120,7 @@ def test_main(verbose=0):
     # deltat controls
     ctrl.set_method_ctrl('deltat',{
         'control':'fixed',
-        'initial': 5e-1,
+        'initial': 1e-2,
         'min': 1e-2,
         'max': 5e-1,
         'expansion': 1.05,
@@ -134,6 +133,8 @@ def test_main(verbose=0):
     ctrl.set_method_ctrl(['ksp','type'],'cg')
     ctrl.set_method_ctrl(['pc','type'],'icc')
     ctrl.set_method_ctrl(['pc','factor_drop_tolerance','dt'],1e-4)
+    ctrl.set_method_ctrl(['pc','type'],'hypre')
+    
 
     
     ctrl.approach_linear_solver = 'direct'
