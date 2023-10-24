@@ -445,7 +445,8 @@ class AdmkControls:
                 # linear solver controls 
                 'ksp': {
                     'type':'cg',
-                    'rtol': tol_constraint
+                    'rtol': tol_constraint,
+                    'norm_type': 'unpreconditioned',
                 },
                 'pc':{
                     'type': 'hypre',
@@ -490,35 +491,67 @@ class AdmkControls:
             keys=[keys]
         
         self.method_ctrl = nested_set(self.method_ctrl,keys,value)
-        
+        self.deltat = self.method_ctrl['deltat']['initial']
         #for key in keys[:-1]:
         #    self.method_ctrl = self.method_ctrl.setdefault(key, {})
         #self.method_ctrl[keys[-1]] = value
         
         
-    def print_info(self, msg, priority):
+    def print_info(self, msg, priority, indent=0):
         """
 	    Print messagge to stdout and to log 
         file according to priority passed
         """
         if (self.verbose > priority):
+            if indent>0:
+                msg='   '*indent+msg
             print(msg)
       
 
-    def set_before_iteration(self):
+            
+    def set_deltat(self, deltat, state, update, state_lower_bound=0):
         """
         Procedure to set new controls after a succesfull update
         """
         deltat_ctrl = self.method_ctrl['deltat']
         if (deltat_ctrl['control'] == 'fixed'):
-            self.deltat = self.deltat
-        elif (deltat_ctrl['control'] == 'expanding'):
-            self.deltat *= deltat_ctrl['expansion']
-            self.deltat = max( min( self.deltat, deltat_ctrl['max']),deltat_ctrl['min'])
+            deltat = deltat
+        elif (deltat_ctrl['control'] == 'expansive'):
+            deltat *= deltat_ctrl['expansion']
+            deltat = max( min( self.deltat, deltat_ctrl['max']),deltat_ctrl['min'])
+        elif (deltat_ctrl['control'] == 'adaptive'):
+            order_down = -1
+            order_up = 1
+            min_u = np.min(update)
+            max_u = np.max(update)
+
+            if min_u < 0:
+                deltat_l = (10**order_down - 1 ) / min_u
+            else:
+                deltat_l = self.method_ctrl['deltat']['max']
+
+            if max_u > 0:
+                deltat_u = (10**order_up - 1 ) / max_u
+            else:
+                deltat_u = self.method_ctrl['deltat']['max']
+
+            deltat = min(deltat_l,deltat_u)
+            deltat = max(deltat,self.method_ctrl['deltat']['min'])
+            deltat = min(deltat,self.method_ctrl['deltat']['max'])
+            
+        elif (deltat_ctrl['control'] == 'adaptive2'):
+            u_min = min(update)
+            if (u_min<0):
+                negative_indeces  = np.where(update < 0)[0]
+                step = np.min((state_lower_bound - state[negative_indeces]) / update[negative_indeces])
+                if (step < deltat_ctrl['min']):
+                    raise ValueError("delta from adaptive strategy={step:.1e} is smaller than {deltat_ctrl['min']=}")
+            else:
+                step=deltat_ctrl['max']
+            deltat = min(step,deltat_ctrl['max'])
         else:
             raise ValueError("deltat['control'] not supported")
-                
-        return self
+        return deltat
 
     def reset_after_failure(self,ierr):
         """
@@ -584,8 +617,10 @@ def solve_with_petsc(stiff, rhs, pot, petsc_options):
 
         # store info
         reason = ksp.getConvergedReason()
+        last_pres = ksp.getResidualNorm()
+        #print(f'{i_rhs=} {KSPReasons[reason]} {i_rhs=} {last_pres=}')
         if reason < 0:
-            print (f'{KSPReasons[reason]=}')
+            print (f'{KSPReasons[reason]=} {i_rhs=}')
             ierr = 1
             break
         else:
@@ -594,12 +629,15 @@ def solve_with_petsc(stiff, rhs, pot, petsc_options):
             h = ksp.getConvergenceHistory()
             if len(h)>0:
                 resvec = h[-(last_iter+1):]
-                res=max(res,resvec[-1])
+                rhs_norm = petsc_rhs.norm()
+                if rhs_norm > 0: 
+                    res=max(res,resvec[-1]/rhs_norm)
             
             last_pres = ksp.getResidualNorm()
-            pres=max(pres,last_pres)
+            pres = max(pres,last_pres)
 
-        #print(f'{pres=}')
+            if (res > petsc_options['ksp_rtol']):
+                print(f'{KSPReasons[reason]=} {i_rhs=} {res=} rhs={petsc_rhs.norm()} pot={petsc_pot.norm()}')
 
         # get solution
         pot_i = petsc_pot.getArray()
@@ -707,7 +745,8 @@ class AdmkSolver:
     
     
     def initial_solution(self):
-        sol = np.ones(self.n_pot*self.problem.n_rhs+self.n_tdens)
+        sol = np.zeros(self.n_pot*self.problem.n_rhs+self.n_tdens)
+        sol[-self.n_tdens:] = 1.0
         return sol
         
 
@@ -792,20 +831,24 @@ class AdmkSolver:
         # I did not find how to get a sub
         petsc_options = (flatten_parameters({
             **{'ksp' :ctrl.method_ctrl.get('ksp')},
+            **{
+                'ksp_initial_guess_nonzero': True,
+                #'ksp_monitor_true_residual': None,
+            },
             **{'pc' : ctrl.method_ctrl.get('pc')}
         }))
 
-        ierr, iter, res, pres = solve_with_petsc_parallel(stiff, rhs, pot, petsc_options,4)
+        ierr, iter, res, pres = solve_with_petsc_parallel(stiff, rhs, pot, petsc_options)
         #ierr, iter, res, pres = solve_with_petsc(stiff, problem.rhs, tdpot[:self.n_pot * self.problem.n_rhs], petsc_options)
         #print('out',pot[0:3])
-        pot, tdens, vel = self.get_otp_solution(tdpot)
-        print('res=',problem.constraint_residual(vel))
+        #pot, tdens, vel = self.get_otp_solution(tdpot)
+        #print('res=',problem.constraint_residual(vel))
 
 
 
         # info
-        if ctrl.verbose >=2 :
-            msg=(f'it={int(iter/self.problem.n_rhs):04d}'
+        if ctrl.verbose >=1 :
+            msg=(f'{ierr=} avg_it={int(iter/self.problem.n_rhs):04d}'
                  +f' max(res)={res:.1e}'
                  +f' max(pres)={pres:.1e}')
             print(msg)
@@ -905,15 +948,16 @@ class AdmkSolver:
                 mat = vec2mat(grad_pot_sq, problem.n_rhs)
                 grad_pot_sq_sum = np.sum(mat,axis=1)
 
-            update = -tdens  * grad_pot_sq_sum + tdens**pmass
-
-            msg=f'{min(update):.2e}<=UPDATE<={max(update):.2e}, deltat={ctrl.deltat:.2e}'
-            #if ctrl.verbose >= 2:
-            print(msg)
+            update = -(-tdens  * grad_pot_sq_sum + tdens**pmass)
+            update_direction = (-grad_pot_sq_sum + tdens**(pmass-1))
             
+            ctrl.deltat = ctrl.set_deltat(ctrl.deltat, tdens, update_direction)
+            msg=f'{np.min(update):.2e}<=UPDATE<={np.max(update):.2e}, deltat={ctrl.deltat:.2e}'
+            ctrl.print_info(msg,0,1)
+
             
             # update tdens
-            tdens = tdens - ctrl.deltat * update
+            tdens = tdens + ctrl.deltat * update
             tdens_min = ctrl.method_ctrl['tdens_min']
             tdens[np.where(tdens < tdens_min)] = tdens_min
             tdpot[-self.n_tdens:] = tdens
@@ -1123,7 +1167,6 @@ class AdmkSolver:
             while ierr_iterate == 0 :
                 # update inputs if time varying
                 problem.update_inputs(self.time)
-
                 ierr_iterate = self.iterate(problem, tdpot, ctrl)
                 if ierr_iterate == 0:    
                     break
@@ -1147,12 +1190,6 @@ class AdmkSolver:
             # Here the user evalutes if convergence is achieved
             pot_old, tdens_old = self.subfunctions(tdpot_old)
             pot, tdens = self.subfunctions(tdpot)
-            msg=f'{min(tdens_old):.2e}<=TDENS_OLD<={max(tdens_old):.2e}, deltat={ctrl.deltat:.2e}'
-            print(msg)
-            msg=f'{min(tdens):.2e}<=TDENS    <={max(tdens):.2e}, deltat={ctrl.deltat:.2e}'
-            print(msg)
-
-
             var = (
                 norm(tdens - tdens_old) /
                 (norm(tdens) * ctrl.deltat)
@@ -1165,25 +1202,29 @@ class AdmkSolver:
             grad = problem.grad.dot(pot)
             grad_matrix = vec2mat(grad**2,problem.n_rhs)
             
-            if (ctrl.verbose > 0):
-                print(f'it={iter} var={var:.2e}')
-        
-            if (ctrl.verbose > 1):
+            if (ctrl.verbose >= 2):
                 print(' ')
-                print('it=,', iter,'t=,',self.time)
                 grad_pot_sq_sum = np.sum(grad_matrix,axis=1)
                 print(
                         f'{min(grad_pot_sq_sum):.2E}'
                         +f'<=sum |GRAD|<='
                         +f'{max(grad_pot_sq_sum):.2E}')
+                print(
+                    f'{min(tdens):.2E}'
+                    +f'<=TDENS<='
+                    +f'{max(tdens):.2E}')
+            if (ctrl.verbose >= 3):
                 for i in range(problem.n_rhs):
                     print(
                         f'{min(abs(grad_matrix[:,i])):.2E}'
                         +f'<=|GRAD|_{i:d} <='
                         +f'{max(abs(grad_matrix[:,i])):.2E}')
-            
+            if (ctrl.verbose >= 1):
+                print(f'it={iter} var={var:.2e}')
+        
+                    
             """ Here user have to set solver controls for next update """
-            ctrl.set_before_iteration()
+            #ctrl.set_before_iteration()
 
         return ierr
 
