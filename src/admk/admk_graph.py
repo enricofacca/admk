@@ -838,7 +838,9 @@ class AdmkSolver:
             **{'pc' : ctrl.method_ctrl.get('pc')}
         }))
 
-        ierr, iter, res, pres = solve_with_petsc_parallel(stiff, rhs, pot, petsc_options)
+        
+        np = min(multiprocessing.cpu_count(), int(self.problem.n_rhs / 4 ) )
+        ierr, iter, res, pres = solve_with_petsc_parallel(stiff, rhs, pot, petsc_options, np)
         #ierr, iter, res, pres = solve_with_petsc(stiff, problem.rhs, tdpot[:self.n_pot * self.problem.n_rhs], petsc_options)
         #print('out',pot[0:3])
         #pot, tdens, vel = self.get_otp_solution(tdpot)
