@@ -476,6 +476,23 @@ class AdmkControls:
             else:
                 deltat_u = self.method_ctrl['deltat']['max']
 
+                
+            r_np = update
+            if np.min(r_np) < 0:
+                negative = np.where(r_np<0)
+                hdown = (10**order_down-1) / r_np[negative]
+                deltat_down = np.min(hdown)
+            else:
+                deltat_down =  self.method_ctrl['deltat']['max']
+
+            if np.max(r_np) > 0:
+                positive = np.where(r_np>0)
+                hup = (10**order_up-1) / r_np[positive]
+                deltat_up = np.min(hup)
+            else:
+                deltat_up = self.method_ctrl['deltat']['max']
+
+
             deltat = min(deltat_l,deltat_u)
             deltat = max(deltat,self.method_ctrl['deltat']['min'])
             deltat = min(deltat,self.method_ctrl['deltat']['max'])
@@ -1086,7 +1103,7 @@ class AdmkSolver:
             return ierr
 
             
-    def solve(self, problem, tdpot, ctrl):
+    def solve(self, problem, tdpot, ctrl, callback):
         """
         Solve the time dependent problem
         Args:
@@ -1101,8 +1118,8 @@ class AdmkSolver:
         ierr = self.syncronize(problem, tdpot, ctrl)
         
         # Start main cycle
-        iter = 0
-        while (ierr == 0) and (iter < ctrl.max_iter):
+        self.iterations = 0
+        while (ierr == 0) and (self.iterations < ctrl.max_iter):
             """ try to update the sol  """
             tdpot_old = cp(tdpot)
             nrestart = 0
@@ -1126,8 +1143,8 @@ class AdmkSolver:
                 
             
             # check if the maximum number of iterations has been reached
-            iter += 1
-            if iter == ctrl.max_iter:
+            self.iterations += 1
+            if self.iterations == ctrl.max_iter:
                 ierr = 2
             
             # Here the user evalutes if convergence is achieved
@@ -1163,8 +1180,11 @@ class AdmkSolver:
                         +f'<=|GRAD|_{i:d} <='
                         +f'{max(abs(grad_matrix[:,i])):.2E}')
             if (ctrl.verbose >= 1):
-                print(f'it={iter} var={var:.2e}')
-        
+                print(f'it={self.iterations} var={var:.2e}')
+
+            if callback is not None:
+                 callback(self,tdpot,ctrl)
+
                     
             """ Here user have to set solver controls for next update """
             #ctrl.set_before_iteration()
