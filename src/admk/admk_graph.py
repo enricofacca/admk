@@ -19,65 +19,6 @@ from petsc4py import PETSc
 import multiprocessing
 
 from multiprocessing import RawArray, Array
-
-# class TdensPotentialVelocity:
-#     """This class contains roblem solution tdens,pot and vel such that
-
-#     vel = diag(tdens) W^{-1} A^T pot
-    
-#     """
-#     def __init__(self, n_tdens,n_pot, tdens0=None, pot0=None,time0=None):
-#         """
-#         Constructor of TdensPotential class, containing unkonws
-#         tdens, pot, flux
-
-#         Args:
-#             n_tdens (int) : length of tdens unknow
-#             n_pot (int) : length of pot unknow
-#             tdens0 (real) : non-negative initial tdens solution. Default: tdens=1.0 
-#             pot0 (real) : initial pot solution. Default: pot=0.0
-#             time0 (real) : initial pot solution. Default: time=0.0
-        
-#         Raise:
-#         ValueError
-
-#         Example:
-#         graph_dmk=GraphDmk(np.array([0,1],[1,2]))
-#         tpdot=TdensPotential(graph_dmk,tdens0=np.ones(2),pot0=np.zeros(3))
-        
-#         """
-#         #: Array size
-        
-#         #: int: Number of tdens variable 
-#         self.n_tdens = n_tdens
-#         #: int: Number of tdens variable 
-#         self.n_pot = n_pot
-
-#         #: Tdens array
-#         self.tdens = np.ones(n_tdens)
-#         if ( not tdens0 is None):
-#             # dimension mismatch
-#             if not length(tdens0) == self.n_tdens:
-#                 myError = ValueError(f'Passed length(tdens0)={len(tdens0):%d} !='+
-#                                      ' {len(tdens0):%d} = n_tdens')
-#                 raise myError
-#             # negative values
-#             if ( any.tdens0 < 0 ) :
-#                 myError = ValueError(f'tdens0 has negative entries')
-#                 raise myError
-#             # set value
-#             self.tdens[:]=tdens0[:]
-#         self.pot=np.zeros(n_pot)
-#         if ( not pot0 is None):
-#             # dimension mismatch
-#             if ( not length(pot0)==self.n_pot):
-#                 myError = ValueError(f'Passed length(pot0)={len(pot0):%d} !='+
-#                                      ' {len(pot0):%d} = n_pot')
-#                 raise myError
-#             self.pot[:]=pot0[:]
-#         self.time=0.0
-#         if ( not time0 is None):
-#             self.time=time0
         
 class MinNorm:
     """
