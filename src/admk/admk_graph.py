@@ -1158,27 +1158,6 @@ class AdmkSolver:
                 ierr = 0
                 break 
             
-            """ Study state system """
-            grad = problem.grad.dot(pot)
-            grad_matrix = vec2mat(grad**2,problem.n_rhs)
-            
-            if (ctrl.verbose >= 2):
-                print(' ')
-                grad_pot_sq_sum = np.sum(grad_matrix,axis=1)
-                print(
-                        f'{min(grad_pot_sq_sum):.2E}'
-                        +f'<=sum |GRAD|<='
-                        +f'{max(grad_pot_sq_sum):.2E}')
-                print(
-                    f'{min(tdens):.2E}'
-                    +f'<=TDENS<='
-                    +f'{max(tdens):.2E}')
-            if (ctrl.verbose >= 3):
-                for i in range(problem.n_rhs):
-                    print(
-                        f'{min(abs(grad_matrix[:,i])):.2E}'
-                        +f'<=|GRAD|_{i:d} <='
-                        +f'{max(abs(grad_matrix[:,i])):.2E}')
             if (ctrl.verbose >= 1):
                 print(f'it={self.iterations} var={var:.2e}')
 
