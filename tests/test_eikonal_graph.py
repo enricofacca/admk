@@ -7,9 +7,8 @@ import os
 # Import Admk solver for graphs
 sys.path.append('../src/')
 from admk import Graph
-from admk import MinNorm
-from admk import AdmkControls
-from admk import AdmkSolver
+from admk import MinNormProblem
+from admk import AdmkSolverNetwork
 
 
 import numpy as np
@@ -52,17 +51,14 @@ def test_main(verbose=0):
     E_matrix=incidence_matrix.transpose()
 
     # Init problem inputs (rhs, q, exponent)
-    problem = MinNorm(E_matrix,  rhs, q_exponent=1.0, weight=weight)
+    problem = MinNormProblem(E_matrix, rhs, q_exponent=1.0, weight=weight)
     
-    
+    print('here')
     # Init solver
-    admk = AdmkSolver(problem,
-                      tol_optimization = 1e-3,
-                      tol_constraint = 1e-8,
-                      method='explicit_tdens',
-                      max_iter = 1000,
-                      max_restart = 5,
-                      verbose=0)
+    admk = AdmkSolverNetwork(
+        problem,
+        tol_opt = 1e-3,
+        tol_constraint = 1e-8)
     
     admk.set_ctrl(
         ['ee','deltat'],{
@@ -82,7 +78,7 @@ def test_main(verbose=0):
 
     
     
-    # run solver (tdpot is changed in place)
+    # run solver 
     # get mu, pot, vel
     admk.solve()
     u, mu, vel = admk.get_otp_solution()
@@ -103,4 +99,4 @@ def test_main(verbose=0):
     return 0
 
 if __name__ == "__main__":
-    sys.exit(test_main(1))
+    test_main(1)
