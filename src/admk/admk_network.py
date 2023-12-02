@@ -887,10 +887,11 @@ class AdmkSolverNetwork:
                 'ksp_type': 'preonly',
                 'pc_type': 'lu'
             }
-            pc_options={
-                #'ksp_type': 'fgmres',
-                #'ksp_rtol': 1e-10,
-                #"ksp_monitor_true_residual" : None,
+            petsc_options={
+                'ksp_type': 'fgmres',
+                'ksp_rtol': 1e-10,
+                "ksp_monitor_true_residual" : None,
+                #
                 "pc_type": "fieldsplit", 
                 "pc_fieldsplit_type" : "schur", # based on schur complement
                 "pc_fieldsplit_schur_fact_type": "full", # use full factorization
@@ -909,6 +910,10 @@ class AdmkSolverNetwork:
                     "pc_type": "hypre",
                 }
                 }
+            petsc_options = flatten_parameters(petsc_options)
+
+            print(petsc_options)
+            
             it = 0
             max_iter = 20
             ierr_newton = 0
@@ -945,29 +950,36 @@ class AdmkSolverNetwork:
                 
 
                 
-                ksp = PETSc.KSP().create()
-                ksp.setOperators(petsc_J)
-                ksp.setOptionsPrefix(problem_prefix)
+                
                 
                 # copy from https://github.com/FEniCS/dolfinx/blob/230e027269c0b872c6649f053e734ed7f49b6962/python/dolfinx/fem/petsc.py#L618
                 # https://github.com/FEniCS/dolfinx/fem/petsc.py
                 opts = PETSc.Options()    
-                opts.prefixPush(problem_prefix)
+                #opts.prefixPush(problem_prefix)
                 for k, v in petsc_options.items():
-                    opts[k] = v
-                opts.prefixPop()
-                ksp.setConvergenceHistory()
+                    opts['-'+k] = v
+                #opts.prefixPop()
+
+                ksp = PETSc.KSP().create()
+                ksp.setOperators(petsc_J)
+                #ksp.setOptionsPrefix(problem_prefix)
+                pc = ksp.getPC()
+                pc.setFromOptions()
+                pc.setFieldSplitIS(('0',self.pot_is),('1',self.tdens_is))
+                pc.setFromOptions()
+                #ksp.setConvergenceHistory()
+                ksp.setUp()
                 ksp.setFromOptions()
-                
+                #ksp.setOptionsPrefix(problem_prefix)
                 #ksp.getPC().setUp()
                 
-                pc = PETSc.PC().create()
-                pc.setOptionsPrefix(problem_prefix)
-                pc.setOperators(petsc_J)
+                #pc = PETSc.PC().create()
+                #pc.setOptionsPrefix(problem_prefix)
+                #pc.setOperators(petsc_J)
                 #ksp.getPC().setFieldSplitIS(('pot',self.pot_is),('tdens',self.tdens_is))
-                pc.setType('fieldsplit')
-                pc.setFieldSplitIS(('pot',self.pot_is),('tdens',self.tdens_is))
-                pc.setFieldSplitType('schur')
+                #pc.setType('fieldsplit')
+                
+                #pc.setFieldSplitType('schur')
                 #pc.setFieldSplitFields(2,[1,0])
                 #opts = PETSc.Options()    
                 #opts.prefixPush(problem_prefix)
@@ -975,22 +987,22 @@ class AdmkSolverNetwork:
                 #    opts[k] = v
                 #opts.prefixPop()
                 
-                pc.setFromOptions()
-                pc.setUp()
-                petsc_options={
-                'ksp_type': 'fgmres',
-                'ksp_rtol': 1e-10,
-                "ksp_monitor_true_residual" : None,
-                    "pc_type": "fieldsplit",
-                }
+                #pc.setFromOptions()
+                #pc.setUp()
+                #petsc_options={
+                #'ksp_type': 'fgmres',
+                #'ksp_rtol': 1e-10,
+                #"ksp_monitor_true_residual" : None,
+                #    "pc_type": "fieldsplit",
+                #}
 
-                ksp.setPC(pc)
+                #ksp.setPC(pc)
                 
 
                 
                 
-                petsc_J.setOptionsPrefix(problem_prefix)
-                petsc_J.setFromOptions()
+                #petsc_J.setOptionsPrefix(problem_prefix)
+                #petsc_J.setFromOptions()
 
                 petsc_inc.setOptionsPrefix(problem_prefix)
                 petsc_inc.setFromOptions()
@@ -1004,7 +1016,7 @@ class AdmkSolverNetwork:
                 
                 # solve
                 ksp.solve(petsc_rhs, petsc_inc)
-                ksp.view()
+                
                 reason = ksp.getConvergedReason()
                 last_pres = ksp.getResidualNorm()
                 if reason < 0:
@@ -1037,7 +1049,8 @@ class AdmkSolverNetwork:
 
                 print(f'{it=} {ierr_newton=}| linear solver {res=:.1e} iter={last_iter}')
                 
-
+            ksp.view()
+                
             if ierr_newton == 0:
                 sol[self.pot_indices] = pot[:]
                 sol[self.tdens_indices] = self.gfvar2tdens(gfvar)[:]
