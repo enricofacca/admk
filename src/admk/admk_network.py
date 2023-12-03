@@ -797,8 +797,34 @@ class AdmkSolverNetwork:
         )
 
         return J11,J12,J21,J22
-    
-    
+
+    def F_block(self, snes,  potgfvar_petsc, F_petsc):
+        potgfvar = potgfvar_petsc.array
+        
+        pot, gfvar = self.subfunctions(potgfvar)
+        tdens = self.gfvar2tdens(gfvar)
+        trans_prime = self.gfvar2tdens(gfvar, 1) 
+
+        fnewton = np.zeros(self.n_pot + self.n_tdens)
+        fnewton[self.pot_indices] = self.Lagrangian_gradient(pot, tdens, 'pot')
+        fnewton[self.tdens_indices] = self.Lagrangian_gradient(pot, tdens, 'tdens') * trans_prime 
+        fnewton[self.tdens_indices] += 1 / self.deltat * self.problem.weight * (gfvar - self.gfvar_old)
+
+        F_petsc.setArray(fnewton)
+
+    def J_block(self, snes, potgfvar_petsc, J_petsc, P_petsc):
+        potgfvar = potgfvar_petsc.array
+        J11, J12, J21, J22 = self.eval_Jacobian(potgfvar)
+        petsc_J11 = scipy2petsc(J11)
+        petsc_J12 = scipy2petsc(J12)
+        petsc_J21 = scipy2petsc(J21)
+        petsc_J22 = scipy2petsc(J22)
+        
+        J_petsc = PETSc.Mat().createNest(
+            [[petsc_J11, petsc_J12],
+             [petsc_J21, petsc_J22]])
+        P_petsc = J_petsc
+        
     def iterate(self, sol):
         """
         Procedure overriding update of parent class(Problem)
@@ -893,6 +919,8 @@ class AdmkSolverNetwork:
             return ierr
 
         elif (method == 'implicit_euler_gfvar'):
+            self.deltat = 1.0
+            
             fnewton = np.zeros(self.n_pot + self.n_tdens)
 
             it = 0
@@ -910,11 +938,11 @@ class AdmkSolverNetwork:
             self.gfvar_old[:] = gfvar[:]
 
             #self.pc.setType('fieldsplit')
-            petsc_options={
+            ksp_options={
                 'ksp_type': 'preonly',
                 'pc_type': 'lu'
             }
-            petsc_options={
+            ksp_options={
                 'ksp_type': 'fgmres',
                 'ksp_rtol': 1e-10,
                 "ksp_monitor_true_residual" : None,
@@ -925,9 +953,10 @@ class AdmkSolverNetwork:
                 # A B^T = (I         )(A  )(I A^{-1})
                 # B  -C   (BA^{-1} I )(  S)(  I     )
                 "pc_fieldsplit_schur_precondition" : "selfp", # form Sp=A+B^T C^{-1} B
-                # swap order of fields
-                "pc_fieldsplit_0_fields": "tdens", # field 1
-                "pc_fieldsplit_1_fields": "pt", # field 0                                }
+                # TODO : swap order of fields, now is not working and we need to swap
+                # when pc_setfieldsplit
+                #"pc_fieldsplit_0_fields": "0", # field 1
+                #"pc_fieldsplit_1_fields": "1", # field 0                                }
                 "fieldsplit_0": {
                     "ksp_type": "preonly",
                     "pc_type": "jacobi",
@@ -937,10 +966,76 @@ class AdmkSolverNetwork:
                     "pc_type": "hypre",
                 }
                 }
-            petsc_options = flatten_parameters(petsc_options)
+            ksp_options = flatten_parameters(ksp_options)
 
-            print(petsc_options)
-            
+            use_snes = False
+            if use_snes:
+                snes_options = {
+                    "snes" : {
+                        "type" : "nls",
+                        "rtol" : 1e-6,
+                        "monitor": None}
+                }
+
+                petsc_options = {
+                    **flatten_parameters(ksp_options),
+                    **flatten_parameters(snes_options)
+                }
+                print(petsc_options)
+                
+                problem_prefix = 'nonlinear_solver_'
+                
+                # Setup SNES solver
+                snes = PETSc.SNES().create()
+
+                opts = PETSc.Options()    
+                opts.prefixPush(problem_prefix)
+                for k, v in petsc_options.items():
+                    opts[k] = v
+                    opts.prefixPop()
+                    
+                pc = snes.ksp.getPC()
+                pc.setFromOptions()
+                pc.setFieldSplitIS(('0',self.pot_is),('1',self.tdens_is))
+                pc.setOptionsPrefix(problem_prefix)
+                pc.setFromOptions()
+
+                # this is allocation 
+                J11, J12, J21, J22 = self.eval_Jacobian(x)
+                petsc_J11 = scipy2petsc(J11)
+                petsc_J12 = scipy2petsc(J12)
+                petsc_J21 = scipy2petsc(J21)
+                petsc_J22 = scipy2petsc(J22)
+
+                petsc_J = PETSc.Mat().createNest(
+                    [[petsc_J11, petsc_J12],
+                    [petsc_J21, petsc_J22]])
+
+                petsc_F = petsc_J.createVecLeft()
+                petsc_x = petsc_J.createVecRight()
+                petsc_x.setArray(x)
+
+
+                # assign funcition, Jacobian, and Jacobian for preconditioner
+                snes.setFunction(self.F_block,petsc_F)
+                snes.setJacobian(self.J_block,petsc_J,P=None)
+
+                
+                snes.setFromOptions()
+                snes.solve(None, petsc_x)
+                x[:] = petsc_x.getArray()
+                pot, gfvar = self.subfunctions(x)
+                snes_converged = snes.getConvergedReason()
+                print(snes_converged)
+                self.eval_F(potgfvar,fnewton)
+                fnorm = norm(fnewton)
+                print(f'|F|{fnorm:.1e}')
+                if ierr_newton == 0:
+                    sol[self.pot_indices] = pot[:]
+                    sol[self.tdens_indices] = self.gfvar2tdens(gfvar)[:]
+                    
+                return 0
+        
             it = 0
             max_iter = 20
             ierr_newton = 0
@@ -992,9 +1087,11 @@ class AdmkSolverNetwork:
                 # https://github.com/FEniCS/dolfinx/fem/petsc.py
                 opts = PETSc.Options()    
                 opts.prefixPush(problem_prefix)
-                for k, v in petsc_options.items():
+                for k, v in ksp_options.items():
                     opts[k] = v
+                    print(k,v)
                 opts.prefixPop()
+                opts.view()
 
                 ksp = PETSc.KSP().create()
                 ksp.setOperators(petsc_J)
@@ -1002,7 +1099,11 @@ class AdmkSolverNetwork:
                 # assign fieldsplit
                 pc = ksp.getPC()
                 pc.setFromOptions()
-                pc.setFieldSplitIS(('0',self.pot_is),('1',self.tdens_is))
+                pc.setFieldSplitIS(('0',self.tdens_is),('1',self.pot_is))
+                
+                #pc.setFieldSplitFields(self.n_tdens,('0','1'))
+                #pc.setFieldSplitFields(self.n_pot,('1','0'))
+                #pc.setFieldSplitIS(('0',self.pot_is),('1',self.tdens_is))
                 pc.setOptionsPrefix(problem_prefix)
                 pc.setFromOptions()
                 
@@ -1058,8 +1159,8 @@ class AdmkSolverNetwork:
                 
 
                 print(f'{it=} {ierr_newton=}| linear solver {res=:.1e} iter={last_iter}')
-                
-            #ksp.view()
+            print(ksp_options)
+            ksp.view()
                 
             if ierr_newton == 0:
                 sol[self.pot_indices] = pot[:]
