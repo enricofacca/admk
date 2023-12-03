@@ -332,3 +332,16 @@ class KrylovSolver():
         #         M=M)
         
         #     tdpot.pot[:]=pot[:]
+
+def scipy2petsc(J):
+    print(J.shape)
+    print(type(J))
+    tmp = J
+    if J.getformat() != 'csr':
+        tmp = J.tocsr()
+    
+        
+    petsc_J = PETSc.Mat().createAIJ(size=tmp.shape,
+                                    csr=(tmp.indptr, tmp.indices,
+                                         tmp.data))
+    return petsc_J

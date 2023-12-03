@@ -15,6 +15,7 @@ from scipy.sparse import bmat
 from .linear_solvers import info_ksp
 from .linear_solvers import get_info
 from .linear_solvers import KSPReasons
+from .linear_solvers import scipy2petsc
 from petsc4py import PETSc
 import multiprocessing
 
@@ -252,7 +253,8 @@ def nested_set(dic, keys, value, create_missing=True):
         for key in not_used:
             del simplified[key]
         return simplified
-                    
+
+
                 
         
 def adaptive_deltat(state, update):
@@ -401,11 +403,14 @@ class AdmkSolverNetwork:
         # IS(=Index Set) is the system used by petsc to store indices
         # We use it to assign which dofs are associate to pot and tdens
         self.pot_is = PETSc.IS()
-        self.pot_is.createGeneral(np.arange(self.n_pot,dtype='i'),comm=PETSc.COMM_WORLD)
-
         self.tdens_is = PETSc.IS()
-        self.tdens_is.createGeneral(np.arange(self.n_tdens,dtype='i')+self.n_pot,comm=PETSc.COMM_WORLD)
-       
+        #self.pot_is.createGeneral(np.arange(self.n_pot,dtype='i'),comm=PETSc.COMM_WORLD)
+        #self.tdens_is.createGeneral(np.arange(self.n_tdens,dtype='i')+self.n_pot,comm=PETSc.COMM_WORLD)
+        self.pot_is.createStride(size=self.n_pot, first=0, step=1, comm=PETSc.COMM_WORLD) 
+        self.tdens_is.createStride(size=self.n_tdens, first=self.n_pot , step=1, comm=PETSc.COMM_WORLD)
+
+
+        
 
     def get_otp_solution(self):
         """
@@ -607,6 +612,28 @@ class AdmkSolverNetwork:
     
     def pmass(self):
         return self.problem.q_exponent / ( 2 - self.problem.q_exponent)
+
+    def mass_function(t, derivative_order=0):
+        self.pmass_exponent = self.pmass()
+        f = lambda t : t**self.pmass_exponent
+        df = f.diff(t)
+        dff = df.diff(t)
+        t = sp.symbols('t')
+        sympy.lambdafy(t, self.mass_function)
+        return
+
+    def g(t):
+        pmass_exponent = self.pmass()
+        t = spmpy.symbol('t')
+        g_fun = t**pmass_exponent/pmass_exponent
+        return g_fun
+
+    def lambdafy(g):
+        t = g.get
+        return sympy.lambdafy(t, g)
+    
+    def weight_mass(self, tdens):
+        return 0.5 * np.dot(problem.weight * self.mass_function(tdens))
     
     def Lagrangian(self, pot, tdens):
         """
@@ -615,7 +642,7 @@ class AdmkSolverNetwork:
         grad_pot = self.problem.grad.dot(pot)
         forcing = self.problem.rhs
         L = ( np.dot(forcing,pot) 
-             - np.dot(tdens * grad_pot**2 / 2, self.problem.weight)
+             - 0.5 * np.dot(tdens * grad_pot**2, self.problem.weight)
              + 0.5 * np.dot(tdens ** self.pmass(), self.problem.weight)
         )   
         return L
@@ -769,7 +796,7 @@ class AdmkSolverNetwork:
             + sp.sparse.diags(1 / self.deltat * self.problem.weight)
         )
 
-        return bmat([[J11,J12],[J21,J22]],format='csr')
+        return J11,J12,J21,J22
     
     
     def iterate(self, sol):
@@ -929,13 +956,22 @@ class AdmkSolverNetwork:
                 if it>=max_iter:
                     ierr_newton = 2
                     break
-                
-                J = self.eval_Jacobian(x)
 
-                petsc_J = PETSc.Mat().createAIJ(size=J.shape,
-                                        csr=(J.indptr, J.indices,
-                                            J.data))
-    
+
+                J11, J12, J21, J22 = self.eval_Jacobian(x)
+                #J = bmat([[J11,J12],[J21,J22]],format='csr')
+                #J = self.eval_Jacobian(x)
+
+                #petsc_J = scipy2petsc(J)
+                petsc_J11 = scipy2petsc(J11)
+                petsc_J12 = scipy2petsc(J12)
+                petsc_J21 = scipy2petsc(J21)
+                petsc_J22 = scipy2petsc(J22)
+
+                petsc_J = PETSc.Mat().createNest(
+                    [[petsc_J11, petsc_J12],
+                     [petsc_J21, petsc_J22]])
+                
                 petsc_inc = petsc_J.createVecLeft()
                 petsc_rhs = petsc_J.createVecRight()
 
@@ -955,54 +991,27 @@ class AdmkSolverNetwork:
                 # copy from https://github.com/FEniCS/dolfinx/blob/230e027269c0b872c6649f053e734ed7f49b6962/python/dolfinx/fem/petsc.py#L618
                 # https://github.com/FEniCS/dolfinx/fem/petsc.py
                 opts = PETSc.Options()    
-                #opts.prefixPush(problem_prefix)
+                opts.prefixPush(problem_prefix)
                 for k, v in petsc_options.items():
-                    opts['-'+k] = v
-                #opts.prefixPop()
+                    opts[k] = v
+                opts.prefixPop()
 
                 ksp = PETSc.KSP().create()
                 ksp.setOperators(petsc_J)
-                #ksp.setOptionsPrefix(problem_prefix)
+                ksp.setOptionsPrefix(problem_prefix)
+                # assign fieldsplit
                 pc = ksp.getPC()
                 pc.setFromOptions()
                 pc.setFieldSplitIS(('0',self.pot_is),('1',self.tdens_is))
+                pc.setOptionsPrefix(problem_prefix)
                 pc.setFromOptions()
-                #ksp.setConvergenceHistory()
+                
+                ksp.setConvergenceHistory()
                 ksp.setUp()
                 ksp.setFromOptions()
-                #ksp.setOptionsPrefix(problem_prefix)
-                #ksp.getPC().setUp()
                 
-                #pc = PETSc.PC().create()
-                #pc.setOptionsPrefix(problem_prefix)
-                #pc.setOperators(petsc_J)
-                #ksp.getPC().setFieldSplitIS(('pot',self.pot_is),('tdens',self.tdens_is))
-                #pc.setType('fieldsplit')
-                
-                #pc.setFieldSplitType('schur')
-                #pc.setFieldSplitFields(2,[1,0])
-                #opts = PETSc.Options()    
-                #opts.prefixPush(problem_prefix)
-                #for k, v in pc_options.items():
-                #    opts[k] = v
-                #opts.prefixPop()
-                
-                #pc.setFromOptions()
-                #pc.setUp()
-                #petsc_options={
-                #'ksp_type': 'fgmres',
-                #'ksp_rtol': 1e-10,
-                #"ksp_monitor_true_residual" : None,
-                #    "pc_type": "fieldsplit",
-                #}
-
-                #ksp.setPC(pc)
-                
-
-                
-                
-                #petsc_J.setOptionsPrefix(problem_prefix)
-                #petsc_J.setFromOptions()
+                petsc_J.setOptionsPrefix(problem_prefix)
+                petsc_J.setFromOptions()
 
                 petsc_inc.setOptionsPrefix(problem_prefix)
                 petsc_inc.setFromOptions()
@@ -1027,7 +1036,8 @@ class AdmkSolverNetwork:
                 h = ksp.getConvergenceHistory()
                 if len(h)>0:
                     resvec = h[-(last_iter+1):]
-                    
+
+                    res = 0
                     if rhs_norm > 0: 
                         res=resvec[-1]/rhs_norm
                         
@@ -1038,7 +1048,7 @@ class AdmkSolverNetwork:
                 # convert back to np
                 inc[:] = petsc_inc.getArray()
 
-                res = norm(J.dot(inc)-fnewton)
+                #res = norm(J.dot(inc)-fnewton)
                 
                 
                 x += inc
@@ -1049,7 +1059,7 @@ class AdmkSolverNetwork:
 
                 print(f'{it=} {ierr_newton=}| linear solver {res=:.1e} iter={last_iter}')
                 
-            ksp.view()
+            #ksp.view()
                 
             if ierr_newton == 0:
                 sol[self.pot_indices] = pot[:]
