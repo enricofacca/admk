@@ -951,17 +951,17 @@ class AdmkSolverNetwork:
                 "pc_fieldsplit_type" : "schur", # based on schur complement
                 "pc_fieldsplit_schur_fact_type": "full", # use full factorization
                 # A B^T = (I         )(A  )(I A^{-1})
-                # B  -C   (BA^{-1} I )(  S)(  I     )
-                "pc_fieldsplit_schur_precondition" : "selfp", # form Sp=A+B^T C^{-1} B
+                # B  -C   (BA^{-1} I )(  S)(  I     )        
                 # TODO : swap order of fields, now is not working and we need to swap
                 # when pc_setfieldsplit
-                #"pc_fieldsplit_0_fields": "0", # field 1
-                #"pc_fieldsplit_1_fields": "1", # field 0                                }
-                "fieldsplit_0": {
+                "pc_fieldsplit_0_fields": "pot", # field 1
+                "pc_fieldsplit_1_fields": "tdens", # field 0 
+                "pc_fieldsplit_schur_precondition" : "selfp", # form Sp=A+B^T C^{-1} B                               }
+                "fieldsplit_tdens": {
                     "ksp_type": "preonly",
                     "pc_type": "jacobi",
                 },
-                "fieldsplit_1": {
+                "fieldsplit_pot": {
                     "ksp_type": "preonly",
                     "pc_type": "hypre",
                 }
@@ -1099,7 +1099,8 @@ class AdmkSolverNetwork:
                 # assign fieldsplit
                 pc = ksp.getPC()
                 pc.setFromOptions()
-                pc.setFieldSplitIS(('0',self.tdens_is),('1',self.pot_is))
+                
+                pc.setFieldSplitIS(('tdens',self.tdens_is),('pot',self.pot_is))
                 
                 #pc.setFieldSplitFields(self.n_tdens,('0','1'))
                 #pc.setFieldSplitFields(self.n_pot,('1','0'))
@@ -1110,7 +1111,7 @@ class AdmkSolverNetwork:
                 ksp.setConvergenceHistory()
                 ksp.setUp()
                 ksp.setFromOptions()
-                
+                pc.view()
                 petsc_J.setOptionsPrefix(problem_prefix)
                 petsc_J.setFromOptions()
 
