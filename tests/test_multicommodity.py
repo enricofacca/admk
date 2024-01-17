@@ -33,24 +33,20 @@ def test_main(verbose=0):
         [2,3],
         [1,2],
         [3,4]])
-    print(len(topol))
     weight = np.ones(len(topol))
 
     # Init. graph problem, incidence matrix and its transpose
     graph = Graph(topol.transpose())
     incidence_matrix = graph.signed_incidence_matrix()
     incidence_matrix_transpose = incidence_matrix.transpose()
-    print(incidence_matrix.shape)
-
+    
     # 2 forcing terms
     forcing_1 = np.ones(graph.n_nodes)
     forcing_1[0] = -sum(forcing_1[1:])
-    print(forcing_1[0],sum(forcing_1[1:]))
     forcing_2 = np.ones(graph.n_nodes)
     forcing_2[-1] = -sum(forcing_2[:-1])
     forcing = np.concatenate([forcing_1,forcing_2])
-    print(forcing_2)
-    
+
     # TIME VARYING FORCING: both defintions should work
     def timeforcing(t):
         return forcing#*np.sin(np.pi/2+20*np.pi*t)

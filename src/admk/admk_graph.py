@@ -355,6 +355,7 @@ class AdmkControls:
         """
         Set the controls of the Dmk solver
         """
+
         self.tol_opt = tol_optimization
         self.tol_constraint = tol_constraint
         self.max_iter = max_iter
@@ -366,7 +367,7 @@ class AdmkControls:
         self.log=log
         self.log=log_file
 
-
+    
         self.time_discretization_method = self.method
         # methods speficific controls
         if self.method == 'explicit_tdens':
@@ -424,6 +425,12 @@ class AdmkControls:
         #: Drop tolerance for incomplete factorization
         self.outer_prec_drop_tolerance=1e-4
 
+    def set(self, keys, value):
+        if not isinstance(keys, list):
+            keys=[keys]
+        
+        self.method_ctrl = nested_set(self.method_ctrl,keys,value)
+        self.deltat = self.method_ctrl['deltat']['initial']
         
     def set_method_ctrl(self, keys, value):
         if not isinstance(keys, list):
@@ -431,9 +438,6 @@ class AdmkControls:
         
         self.method_ctrl = nested_set(self.method_ctrl,keys,value)
         self.deltat = self.method_ctrl['deltat']['initial']
-        #for key in keys[:-1]:
-        #    self.method_ctrl = self.method_ctrl.setdefault(key, {})
-        #self.method_ctrl[keys[-1]] = value
         
         
     def print_info(self, msg, priority, indent=0):
