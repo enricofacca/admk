@@ -60,7 +60,7 @@ Overview
 .. end-badges
 
 Algebraic Dynamics Monge Kantorovich solver for solution of Optimal Transport on
-Graphs. It contains (part of) the work described in `Fast Iterative Solution of the Optimal Transport Problem on Graphs <https://doi.org/10.1137/20M137015X>`_. Consider citying this paper if you find the code inside this repository useful.
+Graphs. It contains (part of) the work described in `Fast Iterative Solution of the Optimal Transport Problem on Graphs <https://doi.org/10.1137/20M137015X>`_. Consider citying this paper if you find the code in this repository useful.
 
 
 
