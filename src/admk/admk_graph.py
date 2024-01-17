@@ -590,24 +590,6 @@ class AdmkSolver:
 
         self.solution = AdmkSolution(problem)
     
-    
-    def initial_solution(self):
-        sol = np.zeros(self.n_pot*self.problem.n_rhs+self.n_tdens)
-        sol[-self.n_tdens:] = 1.0
-        return sol
-    
-        
-
-    def get_problem_solution(self, sol):
-        n_tdens = self.n_tdens
-        n_pot = self.n_pot
-        pot, tdens = self.subfunctions(sol)
-        vel = np.zeros(self.n_tdens * self.problem.n_rhs)
-        for i in range(self.problem.n_rhs):
-            vel[i*n_tdens:(i+1)*n_tdens] = tdens *  (self.problem.gradient.dot(pot[i*n_pot:(i+1)*n_pot]))
-        return pot, tdens, vel
-    
-
     def subfunctions(self, sol):
         """
         Split solution in pot, tdens component
@@ -615,13 +597,6 @@ class AdmkSolver:
         pot = sol.sol[:self.n_pot * self.problem.n_rhs]
         tdens = sol.sol[-self.n_tdens:]
         return pot, tdens 
-
-    
-    def get_subpotential(self, solution, index):
-        """
-        Return the potential associated to index-th commodity
-        """
-        return sol.pot[index*self.n_pot:index*self.n_pot]
 
     
     def build_stiff(self, matrixA, conductivity):
@@ -651,7 +626,7 @@ class AdmkSolver:
         tdpot : syncronized to fill contraint S(tdens) pot = rhs
         info  : control flag (=0 if everthing worked)
         """
-        pot, tdens = self.subfunctions(tdpot)
+        pot, tdens = tdpot.subfunctions()
 		
         # assembly stiff
         msg = (f'{min(tdens):.2E}<=TDENS<={max(tdens):.2E}')
@@ -787,7 +762,7 @@ class AdmkSolver:
         """
         if ctrl.time_discretization_method == 'explicit_tdens':            
             # compute update
-            pot, tdens = self.subfunctions(tdpot)
+            pot, tdens = tdpot.subfunctions()
             grad_pot = problem.grad.dot(pot)
             
             #print('{:.2E}'.format(min(normgrad))+'<=GRAD<='+'{:.2E}'.format(max(normgrad)))
@@ -823,7 +798,7 @@ class AdmkSolver:
             
         elif (ctrl.time_discretization_method == 'explicit_gfvar'):            
             # compute update
-            pot, tdens = self.subfunctions(sol) 
+            pot, tdens = sol.subfunctions() 
             gfvar = self.tdens2gfvar(tdens) 
             trans_prime = self.gfvar2tdens(gfvar, 1) # 1 means zero derivative so 
             grad = problem.potential_gradient(pot)
@@ -851,7 +826,7 @@ class AdmkSolver:
             n_tdens = problem.n_col
             
             # pass in gfvar varaible
-            pot, tdens = self.subfunctions(sol)
+            pot, tdens = sol.subfunctions()
             gfvar_old = self.tdens2gfvar(tdens)
             gfvar = cp(gfvar_old)
             pot   = cp(pot)
@@ -1045,8 +1020,8 @@ class AdmkSolver:
                 ierr = 2
             
             # Here the user evalutes if convergence is achieved
-            pot_old, tdens_old = self.subfunctions(tdpot_old)
-            pot, tdens = self.subfunctions(tdpot)
+            pot_old, tdens_old = tdpot_old.subfunctions()
+            pot, tdens = tdpot.subfunctions()
             var = (
                 norm(tdens - tdens_old) /
                 (norm(tdens) * ctrl.deltat)
