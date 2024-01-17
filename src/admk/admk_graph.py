@@ -78,7 +78,6 @@ class MinNorm:
         # to get the number of rhs and fix the rhs 
         # if fix in time
         self.rhs = self.rhs_of_time(initial_time)
-        print('rhs',np.linalg.norm(self.rhs))
         if (len(self.rhs) % self.n_row != 0):
             myError = ValueError(f'Passed rhs.shape[0]={len(self.rhs):%d} is not a '+
                                  'multiple of {self.n_row:%d} = nrow')
@@ -163,7 +162,6 @@ class MinNorm:
         res: real (nrow of A)-np.array with residual
         """
         rhs_norm = np.linalg.norm(self.rhs)
-        print(f'{rhs_norm=}')
         res = np.linalg.norm(self.div.dot(vel) - self.rhs) / rhs_norm
         return res
 
@@ -357,6 +355,7 @@ class AdmkControls:
         """
         Set the controls of the Dmk solver
         """
+
         self.tol_opt = tol_optimization
         self.tol_constraint = tol_constraint
         self.max_iter = max_iter
@@ -368,7 +367,7 @@ class AdmkControls:
         self.log=log
         self.log=log_file
 
-
+    
         self.time_discretization_method = self.method
         # methods speficific controls
         if self.method == 'explicit_tdens':
@@ -426,6 +425,12 @@ class AdmkControls:
         #: Drop tolerance for incomplete factorization
         self.outer_prec_drop_tolerance=1e-4
 
+    def set(self, keys, value):
+        if not isinstance(keys, list):
+            keys=[keys]
+        
+        self.method_ctrl = nested_set(self.method_ctrl,keys,value)
+        self.deltat = self.method_ctrl['deltat']['initial']
         
     def set_method_ctrl(self, keys, value):
         if not isinstance(keys, list):
@@ -433,9 +438,6 @@ class AdmkControls:
         
         self.method_ctrl = nested_set(self.method_ctrl,keys,value)
         self.deltat = self.method_ctrl['deltat']['initial']
-        #for key in keys[:-1]:
-        #    self.method_ctrl = self.method_ctrl.setdefault(key, {})
-        #self.method_ctrl[keys[-1]] = value
         
         
     def print_info(self, msg, priority, indent=0):
@@ -508,7 +510,8 @@ class AdmkControls:
                 step=deltat_ctrl['max']
             deltat = min(step,deltat_ctrl['max'])
         else:
-            raise ValueError("deltat['control'] not supported")
+            method=deltat_ctrl['control']
+            raise ValueError(f"deltat['control']={method} not supported")
         return deltat
 
     def reset_after_failure(self,ierr):
@@ -522,155 +525,42 @@ class AdmkControls:
 
 
 
-def solve_with_petsc(stiff, rhs, pot, petsc_options):
-    """
-    Solve linear system with petsc
-    """
 
-    n_pot = stiff.shape[0]
-    n_rhs = rhs.shape[0] // n_pot
-    
-    petsc_stiff = PETSc.Mat().createAIJ(size=stiff.shape,
-                                        csr=(stiff.indptr, stiff.indices,
-                                            stiff.data))
-    
-    petsc_pot = petsc_stiff.createVecLeft()
-    petsc_rhs = petsc_stiff.createVecRight()
+class AdmkSolution:
+    def __init__(self, problem):
+        self.problem = problem # just a pointer
+        self.n_pot = problem.n_row
+        self.n_tdens = problem.n_col
+        self.n_rhs = problem.n_rhs
+        self.sol = np.zeros(self.n_pot*self.n_rhs + self.n_tdens)
+        self.sol[-self.n_tdens:] = 1.0
 
+    def subfunctions(self):
+        """
+        Split solution in pot, tdens component
+        """
+        pot = self.sol[:self.n_pot * self.n_rhs]
+        tdens = self.sol[-self.n_tdens:]
+        return pot, tdens
 
-    problem_prefix = 'laplacian_solver_'
-    ksp = PETSc.KSP().create()
-    ksp.setOperators(petsc_stiff)
-    ksp.setOptionsPrefix(problem_prefix)
+    def __call__():
+        return self.sol
 
-    # copy from https://github.com/FEniCS/dolfinx/blob/230e027269c0b872c6649f053e734ed7f49b6962/python/dolfinx/fem/petsc.py#L618
-    # https://github.com/FEniCS/dolfinx/fem/petsc.py
-    opts = PETSc.Options()    
-    opts.prefixPush(problem_prefix)
-    for k, v in petsc_options.items():
-        opts[k] = v
-    opts.prefixPop()
-    ksp.setConvergenceHistory()
-    #ksp.pc.setReusePreconditioner(True) # not sure if this is needed
-    ksp.setFromOptions()            
-    petsc_stiff.setOptionsPrefix(problem_prefix)
-    petsc_stiff.setFromOptions()
-    petsc_pot.setOptionsPrefix(problem_prefix)
-    
-    petsc_rhs.setFromOptions()
+    def get_problem_solution(self):
+        n_tdens = self.n_tdens
+        n_pot = self.n_pot
+        pot, tdens = self.subfunctions()
+        vel = np.zeros(self.n_tdens * self.problem.n_rhs)
+        for i in range(self.problem.n_rhs):
+            vel[i*n_tdens:(i+1)*n_tdens] = tdens *  (self.problem.gradient.dot(pot[i*n_pot:(i+1)*n_pot]))
+        return pot, tdens, vel
 
-        
-    ierr = 0   
-    iter = 0
-    res = 0
-    pres = 0
-    for i_rhs in range(n_rhs):
-        # convert to petsc
-        #rhs_i = rhs[i_rhs*self.n_pot:(i_rhs+1)*self.n_pot]
-        petsc_rhs.setArray(rhs[i_rhs*n_pot:(i_rhs+1)*n_pot])
-        petsc_pot.setArray(pot[i_rhs*n_pot:(i_rhs+1)*n_pot])
+    def get_subpotential(self, i):
+        """
+        Internal procedure to get i-th potential
+        """
+        return self.sol[i*self.n_pot:(i+1)*self.n_pot]
 
-        # solve
-        ksp.solve(petsc_rhs, petsc_pot)
-
-        # store info
-        reason = ksp.getConvergedReason()
-        last_pres = ksp.getResidualNorm()
-        #print(f'{i_rhs=} {KSPReasons[reason]} {i_rhs=} {last_pres=}')
-        if reason < 0:
-            print (f'{KSPReasons[reason]=} {i_rhs=}')
-            ierr = 1
-            break
-        else:
-            last_iter = ksp.getIterationNumber()
-            iter+=last_iter
-            h = ksp.getConvergenceHistory()
-            if len(h)>0:
-                resvec = h[-(last_iter+1):]
-                rhs_norm = petsc_rhs.norm()
-                if rhs_norm > 0: 
-                    res=max(res,resvec[-1]/rhs_norm)
-            
-            last_pres = ksp.getResidualNorm()
-            pres = max(pres,last_pres)
-
-            if (res > petsc_options['ksp_rtol']):
-                print(f'{KSPReasons[reason]=} {i_rhs=} {res=} rhs={petsc_rhs.norm()} pot={petsc_pot.norm()}')
-
-        # get solution
-        pot_i = petsc_pot.getArray()
-        pot[i_rhs * n_pot : (i_rhs+1) * n_pot] = pot_i
-
-    return ierr, iter, res, pres        
-
-def initpool(rhs, pot):
-    global shared_rhs
-    global shared_pot
-    shared_rhs = rhs
-    shared_pot = pot
-
-def solve_portion(stiff, petsc_options, start, end):
-    """
-    Solver A pot_i = rhs_i for i in [start,end)
-    """
-    n_pot = stiff.shape[0]
-    
-    np_rhs = np.frombuffer(shared_rhs.get_obj(), dtype=np.float64)
-    np_pot = np.frombuffer(shared_pot.get_obj(), dtype=np.float64)
-    
-    rhs_p = np_rhs[start * n_pot: end * n_pot]
-    pot_p = np_pot[start * n_pot: end * n_pot]
-
-    ierr, iter, res, pres = solve_with_petsc(stiff, rhs_p, pot_p, petsc_options)
-    #print('in',pot_p[0:3])
-    np_pot = np.frombuffer(shared_pot.get_obj())
-    np.copyto(np_pot[start * n_pot: end * n_pot],pot_p)
-    #print(np_potprese])
-
-    return ierr, iter, res, pres
-
-
-def solve_with_petsc_parallel(stiff, rhs, pot, petsc_options, NUM_WORKERS=None):
-    if NUM_WORKERS is None:
-        NUM_WORKERS = multiprocessing.cpu_count()
-    n_pot = stiff.shape[0]
-    n_rhs = len(rhs)// n_pot
-    NUM_WORKERS = min(min(NUM_WORKERS, multiprocessing.cpu_count()),n_rhs)
-    
-    chunk_size = int(n_rhs / NUM_WORKERS) + 1 
-    #print(f'{n_rhs=} {chunk_size=} {NUM_WORKERS=}')
-    
-    rhs_mp = multiprocessing.Array('d', n_pot * n_rhs, lock=True)
-    rhs_np = np.frombuffer(rhs_mp.get_obj())
-    np.copyto(rhs_np,rhs)
-    
-    pot_mp = multiprocessing.Array('d', n_pot * n_rhs, lock=True)
-    pot_np = np.frombuffer(pot_mp.get_obj())
-    np.copyto(pot_np,pot)
-
-    # create shared memory with rhs and pot
-    pool = multiprocessing.Pool(processes=NUM_WORKERS, initializer=initpool, initargs=(rhs_mp,pot_mp))
-
-    result = []
-    indeces = np.arange(n_rhs)
-    for i in range(NUM_WORKERS):
-        start = i*chunk_size 
-        end = start + chunk_size 
-        if i == NUM_WORKERS-1 :
-            end = n_rhs
-        result.append(pool.apply_async(solve_portion, args=(stiff, petsc_options, start, end)))
-    
-    
-    infos = [r.get() for r in result]
-    ierr = sum([ info[0] for info in infos])
-    iter = sum([ info[1] for info in infos])
-    res = max([ info[2] for info in infos])
-    pres = max([ info[3] for info in infos])
-    pool.close()
-    pool.join()
-    pot[:] = np.frombuffer(pot_mp.get_obj())
-    
-    return ierr, iter, res, pres
 
 
 class AdmkSolver:
@@ -683,12 +573,13 @@ class AdmkSolver:
     dynamics 
     \dt \Tdens(t)=\Tdens(t) * | \Grad \Pot(\Tdens)|^2 -Tdens^{gamma}    
     """
-    def __init__(self,problem):
+    def __init__(self,problem, ctrl):
         """
 		Initialize solver with passed controls (or default)
         and initialize structure to store info on solver application
         """
-		# init infos
+        self.ctrl = cp(ctrl) # create a copy
+	# init infos
         self.linear_solver_iterations = 0
         # non linear solver
         self.nonlinear_solver_iterations = 0
@@ -700,38 +591,16 @@ class AdmkSolver:
         self.problem = problem
 
         self.time = problem.initial_time
-    
-    
-    def initial_solution(self):
-        sol = np.zeros(self.n_pot*self.problem.n_rhs+self.n_tdens)
-        sol[-self.n_tdens:] = 1.0
-        return sol
-        
 
-    def get_otp_solution(self, sol):
-        n_tdens = self.n_tdens
-        n_pot = self.n_pot
-        pot, tdens = self.subfunctions(sol)
-        vel = np.zeros(self.n_tdens * self.problem.n_rhs)
-        for i in range(self.problem.n_rhs):
-            vel[i*n_tdens:(i+1)*n_tdens] = tdens *  (self.problem.gradient.dot(pot[i*n_pot:(i+1)*n_pot]))
-        return pot, tdens, vel
+        self.solution = AdmkSolution(problem)
     
-
-    def subfunctions(self,sol):
+    def subfunctions(self, sol):
         """
         Split solution in pot, tdens component
         """
-        pot = sol[:self.n_pot * self.problem.n_rhs]
-        tdens = sol[-self.n_tdens:]
+        pot = sol.sol[:self.n_pot * self.problem.n_rhs]
+        tdens = sol.sol[-self.n_tdens:]
         return pot, tdens 
-
-    
-    def get_subpotential(self, solution, index):
-        """
-        Return the potential associated to index-th commodity
-        """
-        return sol.pot[index*self.n_pot:index*self.n_pot]
 
     
     def build_stiff(self, matrixA, conductivity):
@@ -761,7 +630,7 @@ class AdmkSolver:
         tdpot : syncronized to fill contraint S(tdens) pot = rhs
         info  : control flag (=0 if everthing worked)
         """
-        pot, tdens = self.subfunctions(tdpot)
+        pot, tdens = tdpot.subfunctions()
 		
         # assembly stiff
         msg = (f'{min(tdens):.2E}<=TDENS<={max(tdens):.2E}')
@@ -797,7 +666,8 @@ class AdmkSolver:
         }))
 
         
-        np = min(multiprocessing.cpu_count(), int(self.problem.n_rhs / 4 ) )
+        np = max(min(multiprocessing.cpu_count(), int(self.problem.n_rhs / 4 ) ),1)
+        
         ierr, iter, res, pres = solve_with_petsc_parallel(stiff, rhs, pot, petsc_options, np)
         #ierr, iter, res, pres = solve_with_petsc(stiff, problem.rhs, tdpot[:self.n_pot * self.problem.n_rhs], petsc_options)
         #print('out',pot[0:3])
@@ -823,7 +693,7 @@ class AdmkSolver:
         return ierr
         
 
-    def tdens2gfvar(self,tdens):
+    def tdens2gfvar(self, tdens):
         """
         Transformation from tdens variable to gfvar (gradient flow variable)
         """
@@ -896,7 +766,7 @@ class AdmkSolver:
         """
         if ctrl.time_discretization_method == 'explicit_tdens':            
             # compute update
-            pot, tdens = self.subfunctions(tdpot)
+            pot, tdens = tdpot.subfunctions()
             grad_pot = problem.grad.dot(pot)
             
             #print('{:.2E}'.format(min(normgrad))+'<=GRAD<='+'{:.2E}'.format(max(normgrad)))
@@ -920,7 +790,7 @@ class AdmkSolver:
             tdens = tdens + ctrl.deltat * update
             tdens_min = ctrl.method_ctrl['tdens_min']
             tdens[np.where(tdens < tdens_min)] = tdens_min
-            tdpot[-self.n_tdens:] = tdens
+            tdpot.sol[-self.n_tdens:] = tdens
             
             self.time += ctrl.deltat
             problem.update_inputs(self.time)
@@ -932,7 +802,7 @@ class AdmkSolver:
             
         elif (ctrl.time_discretization_method == 'explicit_gfvar'):            
             # compute update
-            pot, tdens = self.subfunctions(sol) 
+            pot, tdens = sol.subfunctions() 
             gfvar = self.tdens2gfvar(tdens) 
             trans_prime = self.gfvar2tdens(gfvar, 1) # 1 means zero derivative so 
             grad = problem.potential_gradient(pot)
@@ -960,7 +830,7 @@ class AdmkSolver:
             n_tdens = problem.n_col
             
             # pass in gfvar varaible
-            pot, tdens = self.subfunctions(sol)
+            pot, tdens = sol.subfunctions()
             gfvar_old = self.tdens2gfvar(tdens)
             gfvar = cp(gfvar_old)
             pot   = cp(pot)
@@ -1102,8 +972,10 @@ class AdmkSolver:
 
             return ierr
 
+    def set_initial_guess(self, initial_solution):
+        self.solution = cp(initial_solution)
             
-    def solve(self, problem, tdpot, ctrl, callback):
+    def solve(self, callbacks=[]):
         """
         Solve the time dependent problem
         Args:
@@ -1112,7 +984,11 @@ class AdmkSolver:
             ctrl: control object
         Returns:
             ierr: error code (0: success)
-        """     
+        """
+        tdpot = self.solution
+        problem = self.problem
+        ctrl = self.ctrl
+        
         # Syncronize the potential 
         problem.update_inputs(problem.initial_time)
         ierr = self.syncronize(problem, tdpot, ctrl)
@@ -1148,8 +1024,8 @@ class AdmkSolver:
                 ierr = 2
             
             # Here the user evalutes if convergence is achieved
-            pot_old, tdens_old = self.subfunctions(tdpot_old)
-            pot, tdens = self.subfunctions(tdpot)
+            pot_old, tdens_old = tdpot_old.subfunctions()
+            pot, tdens = tdpot.subfunctions()
             var = (
                 norm(tdens - tdens_old) /
                 (norm(tdens) * ctrl.deltat)
@@ -1161,7 +1037,7 @@ class AdmkSolver:
             if (ctrl.verbose >= 1):
                 print(f'it={self.iterations} var={var:.2e}')
 
-            if callback is not None:
+            for callback in callbacks:
                  callback(self,tdpot,ctrl)
 
                     
@@ -1201,3 +1077,154 @@ def get_portion(pot, n_portion, i):
     """
     n_pot = len(pot) // n_portion
     return pot[i*n_pot:(i+1)*n_pot]
+
+
+def solve_with_petsc(stiff, rhs, pot, petsc_options):
+    """
+    Solve linear system with petsc
+    """
+
+    n_pot = stiff.shape[0]
+    n_rhs = rhs.shape[0] // n_pot
+    
+    petsc_stiff = PETSc.Mat().createAIJ(size=stiff.shape,
+                                        csr=(stiff.indptr, stiff.indices,
+                                            stiff.data))
+    
+    petsc_pot = petsc_stiff.createVecLeft()
+    petsc_rhs = petsc_stiff.createVecRight()
+
+
+    problem_prefix = 'laplacian_solver_'
+    ksp = PETSc.KSP().create()
+    ksp.setOperators(petsc_stiff)
+    ksp.setOptionsPrefix(problem_prefix)
+
+    # copy from https://github.com/FEniCS/dolfinx/blob/230e027269c0b872c6649f053e734ed7f49b6962/python/dolfinx/fem/petsc.py#L618
+    # https://github.com/FEniCS/dolfinx/fem/petsc.py
+    opts = PETSc.Options()    
+    opts.prefixPush(problem_prefix)
+    for k, v in petsc_options.items():
+        opts[k] = v
+    opts.prefixPop()
+    ksp.setConvergenceHistory()
+    #ksp.pc.setReusePreconditioner(True) # not sure if this is needed
+    ksp.setFromOptions()            
+    petsc_stiff.setOptionsPrefix(problem_prefix)
+    petsc_stiff.setFromOptions()
+    petsc_pot.setOptionsPrefix(problem_prefix)
+    
+    petsc_rhs.setFromOptions()
+
+        
+    ierr = 0   
+    iter = 0
+    res = 0
+    pres = 0
+    for i_rhs in range(n_rhs):
+        # convert to petsc
+        #rhs_i = rhs[i_rhs*self.n_pot:(i_rhs+1)*self.n_pot]
+        petsc_rhs.setArray(rhs[i_rhs*n_pot:(i_rhs+1)*n_pot])
+        petsc_pot.setArray(pot[i_rhs*n_pot:(i_rhs+1)*n_pot])
+
+        # solve
+        ksp.solve(petsc_rhs, petsc_pot)
+
+        # store info
+        reason = ksp.getConvergedReason()
+        last_pres = ksp.getResidualNorm()
+        #print(f'{i_rhs=} {KSPReasons[reason]} {i_rhs=} {last_pres=}')
+        if reason < 0:
+            print (f'{KSPReasons[reason]=} {i_rhs=}')
+            ierr = 1
+            break
+        else:
+            last_iter = ksp.getIterationNumber()
+            iter+=last_iter
+            h = ksp.getConvergenceHistory()
+            if len(h)>0:
+                resvec = h[-(last_iter+1):]
+                rhs_norm = petsc_rhs.norm()
+                if rhs_norm > 0: 
+                    res=max(res,resvec[-1]/rhs_norm)
+            
+            last_pres = ksp.getResidualNorm()
+            pres = max(pres,last_pres)
+
+            if (res > petsc_options['ksp_rtol']):
+                print(f'{KSPReasons[reason]=} {i_rhs=} {res=} rhs={petsc_rhs.norm()} pot={petsc_pot.norm()}')
+
+        # get solution
+        pot_i = petsc_pot.getArray()
+        pot[i_rhs * n_pot : (i_rhs+1) * n_pot] = pot_i
+
+    return ierr, iter, res, pres        
+
+def initpool(rhs, pot):
+    global shared_rhs
+    global shared_pot
+    shared_rhs = rhs
+    shared_pot = pot
+
+def solve_portion(stiff, petsc_options, start, end):
+    """
+    Solver A pot_i = rhs_i for i in [start,end)
+    """
+    n_pot = stiff.shape[0]
+    
+    np_rhs = np.frombuffer(shared_rhs.get_obj(), dtype=np.float64)
+    np_pot = np.frombuffer(shared_pot.get_obj(), dtype=np.float64)
+    
+    rhs_p = np_rhs[start * n_pot: end * n_pot]
+    pot_p = np_pot[start * n_pot: end * n_pot]
+
+    ierr, iter, res, pres = solve_with_petsc(stiff, rhs_p, pot_p, petsc_options)
+    #print('in',pot_p[0:3])
+    np_pot = np.frombuffer(shared_pot.get_obj())
+    np.copyto(np_pot[start * n_pot: end * n_pot],pot_p)
+    #print(np_potprese])
+
+    return ierr, iter, res, pres
+
+
+def solve_with_petsc_parallel(stiff, rhs, pot, petsc_options, NUM_WORKERS=None):
+    if NUM_WORKERS is None:
+        NUM_WORKERS = multiprocessing.cpu_count()
+    n_pot = stiff.shape[0]
+    n_rhs = len(rhs)// n_pot
+    NUM_WORKERS = min(min(NUM_WORKERS, multiprocessing.cpu_count()),n_rhs)
+
+    chunk_size = int(n_rhs / NUM_WORKERS) + 1 
+    
+    
+    rhs_mp = multiprocessing.Array('d', n_pot * n_rhs, lock=True)
+    rhs_np = np.frombuffer(rhs_mp.get_obj())
+    np.copyto(rhs_np,rhs)
+    
+    pot_mp = multiprocessing.Array('d', n_pot * n_rhs, lock=True)
+    pot_np = np.frombuffer(pot_mp.get_obj())
+    np.copyto(pot_np,pot)
+
+    # create shared memory with rhs and pot
+    pool = multiprocessing.Pool(processes=NUM_WORKERS, initializer=initpool, initargs=(rhs_mp,pot_mp))
+
+    result = []
+    indeces = np.arange(n_rhs)
+    for i in range(NUM_WORKERS):
+        start = i*chunk_size 
+        end = start + chunk_size 
+        if i == NUM_WORKERS-1 :
+            end = n_rhs
+        result.append(pool.apply_async(solve_portion, args=(stiff, petsc_options, start, end)))
+    
+    
+    infos = [r.get() for r in result]
+    ierr = sum([ info[0] for info in infos])
+    iter = sum([ info[1] for info in infos])
+    res = max([ info[2] for info in infos])
+    pres = max([ info[3] for info in infos])
+    pool.close()
+    pool.join()
+    pot[:] = np.frombuffer(pot_mp.get_obj())
+    
+    return ierr, iter, res, pres

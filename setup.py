@@ -21,6 +21,10 @@ def read(*names, **kwargs):
     ) as fh:
         return fh.read()
 
+with open("requirements.txt") as f:
+    required = f.read().splitlines()
+
+print(required)
 
 setup(
     name='admk',
@@ -72,12 +76,7 @@ setup(
         # eg: 'keyword1', 'keyword2', 'keyword3',
     ],
     python_requires='>=3.6',
-    install_requires=[
-        'rcis>=0.2.0',
-        'numpy>=1.19.0',
-        'scipy>=1.5.0',
-        'petsc4py',
-    ],
+    install_requires = required,
     extras_require={
         # eg:
         #   'rst': ['docutils>=0.11'],

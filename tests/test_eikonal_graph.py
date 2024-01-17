@@ -61,14 +61,15 @@ def test_main(verbose=0):
         tol_constraint = 1e-8)
     
     admk.set_ctrl(
-        ['ee','deltat'],{
-            'control':'expanding',
+        ['explicit_euler_tdens','deltat'],{
+            'control':'adaptive',
             'initial': 1e-1,
             'min': 1e-2,
             'max': 5e-1,
             'expansion': 1.05,
             'contraction': 2.0
         })
+    admk.set_ctrl('method','implicit_euler_gfvar')
     # linear solver
     # matrix is singualr. we need to relax it with + relax*identity 
     admk.set_ctrl('relax_Laplacian',1e-10)
@@ -76,12 +77,14 @@ def test_main(verbose=0):
     admk.set_ctrl(['pc','type'],'lu')
     admk.set_ctrl(['pc','factor_drop_tolerance','dt'],1e-4)
 
+    admk.set_ctrl("verbose",2)
+    admk.set_ctrl("max_iter",50)
     
     
     # run solver 
     # get mu, pot, vel
     admk.solve()
-    u, mu, vel = admk.get_otp_solution()
+    vel, u, mu = admk.get_otp_solution()
 
     # shift potential to get zero at the root node
     u -= u[0] 
