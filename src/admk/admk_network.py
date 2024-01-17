@@ -954,17 +954,18 @@ class AdmkSolverNetwork:
                 # B  -C   (BA^{-1} I )(  S)(  I     )        
                 # TODO : swap order of fields, now is not working and we need to swap
                 # when pc_setfieldsplit
-                "pc_fieldsplit_0_fields": "pot", # field 1
-                "pc_fieldsplit_1_fields": "tdens", # field 0 
+                "pc_fieldsplit_0_fields": "1,", # field 1
+                "pc_fieldsplit_1_fields": "0,", # field 0 
                 "pc_fieldsplit_schur_precondition" : "selfp", # form Sp=A+B^T C^{-1} B                               }
-                "fieldsplit_tdens": {
+                "fieldsplit_0": {
                     "ksp_type": "preonly",
                     "pc_type": "jacobi",
                 },
-                "fieldsplit_pot": {
+                "fieldsplit_1": {
                     "ksp_type": "preonly",
                     "pc_type": "hypre",
-                }
+                },
+                "info": None
                 }
             ksp_options = flatten_parameters(ksp_options)
 
@@ -1100,7 +1101,7 @@ class AdmkSolverNetwork:
                 pc = ksp.getPC()
                 pc.setFromOptions()
                 
-                pc.setFieldSplitIS(('tdens',self.tdens_is),('pot',self.pot_is))
+                pc.setFieldSplitIS(('0',self.tdens_is),('1',self.pot_is))
                 
                 #pc.setFieldSplitFields(self.n_tdens,('0','1'))
                 #pc.setFieldSplitFields(self.n_pot,('1','0'))
