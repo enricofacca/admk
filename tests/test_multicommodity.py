@@ -52,12 +52,12 @@ def test_main(verbose=0):
     print(forcing_2)
     
     # TIME VARYING FORCING: both defintions should work
-    def time_varying_forcing(t):
+    def timeforcing(t):
         return forcing#*np.sin(np.pi/2+20*np.pi*t)
 
     # time_varying_forcing = forcing
     problem = MinNorm(incidence_matrix_transpose,
-                      rhs_of_time=time_varying_forcing,
+                      rhs_of_time=forcing,
                       q_exponent=1.0,
                       weight=weight)
  
